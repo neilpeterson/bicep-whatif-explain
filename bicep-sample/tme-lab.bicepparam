@@ -11,4 +11,5 @@ param headersToLog = [
   'X-JWT-Audience'
   'X-JWT-Status'
   'X-Azure-Ref'
+  'X-Azure-ID'
 ]
