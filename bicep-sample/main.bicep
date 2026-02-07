@@ -53,10 +53,14 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
     name: 'Standard_LRS'
   }
   kind: 'StorageV2'
+  tags: {
+    Environment: 'Production'
+    ManagedBy: 'Bicep'
+  }
   properties: {
     minimumTlsVersion: 'TLS1_2'
     allowBlobPublicAccess: false
-    accessTier: 'Cool'
+    accessTier: 'Hot'
     publicNetworkAccess: 'Enabled'
   }
 }
