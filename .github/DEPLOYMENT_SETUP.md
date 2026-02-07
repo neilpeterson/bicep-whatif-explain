@@ -83,6 +83,63 @@ az ad app federated-credential create `
   --parameters $federatedCredPR
 ```
 
+#### Verify Federated Credentials
+
+After creating the credentials, verify the subject identifiers are correct:
+
+```powershell
+# List all federated credentials for the app
+az ad app federated-credential list --id $APP_ID --query "[].{name:name, subject:subject}" -o table
+```
+
+**Expected output:**
+```
+Name                    Subject
+----------------------  ------------------------------------------------------------
+github-main-branch      repo:YOUR-USERNAME/bicep-whatif-explain:ref:refs/heads/main
+github-pull-requests    repo:YOUR-USERNAME/bicep-whatif-explain:pull_request
+```
+
+#### Common Issues and Tips
+
+**Problem: Subject shows incorrect format** (e.g., `repo:email@domain.com//heads/main`)
+
+**Cause:** Variables not set correctly or using wrong shell (bash instead of PowerShell)
+
+**Solutions:**
+
+1. **Verify variables before running commands:**
+   ```powershell
+   Write-Host "GitHub Org: $GITHUB_ORG"
+   Write-Host "Repo Name: $REPO_NAME"
+   Write-Host "Full subject: repo:$GITHUB_ORG/$REPO_NAME:ref:refs/heads/main"
+   ```
+
+2. **Use hardcoded values to avoid variable expansion issues:**
+   ```powershell
+   # Replace YOUR-USERNAME with your actual GitHub username
+   $params = '{"name":"github-main-branch","issuer":"https://token.actions.githubusercontent.com","subject":"repo:YOUR-USERNAME/bicep-whatif-explain:ref:refs/heads/main","audiences":["api://AzureADTokenExchange"]}'
+
+   az ad app federated-credential create --id $APP_ID --parameters $params
+   ```
+
+3. **Manual setup via Azure Portal** (easiest if commands aren't working):
+   - Go to Azure Portal → Azure AD → App registrations → `github-actions-bicep-deploy`
+   - Click "Certificates & secrets" → "Federated credentials" tab
+   - Click "+ Add credential"
+   - Select "Other issuer"
+   - Fill in:
+     - **Issuer:** `https://token.actions.githubusercontent.com`
+     - **Subject identifier:** `repo:YOUR-USERNAME/bicep-whatif-explain:ref:refs/heads/main`
+     - **Name:** `github-main-branch`
+     - **Audience:** `api://AzureADTokenExchange`
+
+**Important:** The subject identifier format must be exact:
+- Main branch: `repo:ORG/REPO:ref:refs/heads/main`
+- Pull requests: `repo:ORG/REPO:pull_request`
+- Use your GitHub **username**, NOT your email address
+- Include the full repository name
+
 ### Step 3: Assign Azure Permissions
 
 ```powershell
@@ -129,26 +186,72 @@ git push origin main
 
 ## Troubleshooting
 
+### Error: "Login failed - Not all values are present"
+
+**Symptoms:** GitHub Actions fails with "client-id and tenant-id are not supplied"
+
+**Causes:**
+- Secrets not configured in GitHub
+- Secrets configured in an Environment but workflow doesn't reference it
+
+**Solutions:**
+1. Verify secrets exist in GitHub (Settings → Secrets and variables → Actions):
+   - `AZURE_CLIENT_ID`
+   - `AZURE_TENANT_ID`
+   - `AZURE_SUBSCRIPTION_ID`
+
+2. If secrets are in an Environment (e.g., `azure-personal-subscription`), update workflow:
+   ```yaml
+   jobs:
+     deploy:
+       environment: azure-personal-subscription  # Add this line
+   ```
+
+3. Verify variable exists:
+   - `AZURE_RESOURCE_GROUP` (in Variables, not Secrets)
+
+### OIDC Error: "No matching federated identity record found"
+
+**Symptoms:** Authentication fails with "AADSTS70021: No matching federated identity record found"
+
+**Causes:**
+- Federated credential subject doesn't match the GitHub repository
+- Subject identifier has wrong format (common with variable expansion issues)
+
+**Solutions:**
+1. **Check subject format in Azure Portal:**
+   - Go to App registration → Certificates & secrets → Federated credentials
+   - Verify subject shows: `repo:USERNAME/bicep-whatif-explain:ref:refs/heads/main`
+   - NOT: `repo:email@domain.com//heads/main` ❌
+   - NOT: `repo:USERNAME//:ref:refs/heads/main` ❌
+
+2. **List credentials via CLI to verify:**
+   ```powershell
+   az ad app federated-credential list --id $APP_ID --query "[].{name:name, subject:subject}" -o table
+   ```
+
+3. **Fix incorrect credentials:**
+   - Delete the incorrect credential in Azure Portal
+   - Recreate manually through the portal UI (see Step 2 tips above)
+   - Or use hardcoded JSON string approach to avoid variable issues
+
 ### Error: "The client does not have authorization"
 
 - Verify the app registration has Contributor role on the resource group
 - Check that the resource group name in GitHub variables matches exactly
-- Ensure the federated credential subject matches your repository
+- Confirm role assignment: `az role assignment list --assignee $APP_ID -o table`
 
 ### Error: "Resource not found" for APIM or App Insights
 
 - Ensure the APIM instance and Application Insights logger exist
 - Verify the names in `bicep-sample/tme-lab.bicepparam` match your Azure resources
-
-### OIDC Error: "No matching federated identity record found"
-
-- Verify federated credentials subject matches: `repo:ORG/REPO:ref:refs/heads/main`
-- Ensure the `id-token: write` permission is set in the workflow
+- Check that resources are in the same resource group specified in parameters
 
 ### Storage Account Name Conflict
 
 - Storage account names must be globally unique
 - Update `storageAccountName` in `bicep-sample/tme-lab.bicepparam` if needed
+- Use lowercase letters and numbers only (no hyphens or underscores)
 
 ## Next Steps
 
