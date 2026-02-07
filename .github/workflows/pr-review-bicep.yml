@@ -59,18 +59,52 @@ jobs:
           cat whatif-output.txt
 
       - name: AI Review & Post PR Comment
+        if: always()  # Run even if previous steps fail
+        continue-on-error: true  # Don't fail the workflow if risk is high
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REF: ${{ github.ref }}
         run: |
+          echo "🤖 Running AI analysis and posting to PR..."
           cat whatif-output.txt | whatif-explain \
             --ci \
             --diff-ref origin/main \
             --bicep-dir bicep-sample/ \
             --format markdown \
-            --post-comment
+            --post-comment \
+            2>&1 | tee ai-review.log
+
+          EXIT_CODE=${PIPESTATUS[1]}
+          echo "AI Review exit code: $EXIT_CODE"
+
+          if [ $EXIT_CODE -eq 0 ]; then
+            echo "✅ Deployment is safe to proceed"
+          elif [ $EXIT_CODE -eq 1 ]; then
+            echo "⚠️ Deployment risk detected - check PR comment for details"
+            exit 1
+          else
+            echo "❌ AI Review failed with error"
+            exit $EXIT_CODE
+          fi
+
+      - name: Add to GitHub Step Summary
+        if: always()
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          echo "## 🔍 Azure Bicep What-If Analysis" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat whatif-output.txt | whatif-explain --format markdown >> $GITHUB_STEP_SUMMARY || true
+
+      - name: Upload AI Review Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-review-log
+          path: ai-review.log
+          retention-days: 30
 
       - name: Upload What-If Output
         if: always()
