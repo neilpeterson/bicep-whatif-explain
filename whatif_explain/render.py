@@ -26,6 +26,20 @@ RISK_STYLES = {
 }
 
 
+def _colorize(text: str, color: str, use_color: bool) -> str:
+    """Apply color formatting if use_color is True.
+
+    Args:
+        text: Text to colorize
+        color: Color name (e.g., "red", "green", "yellow")
+        use_color: Whether to apply color formatting
+
+    Returns:
+        Formatted text with color markup if use_color, otherwise plain text
+    """
+    return f"[{color}]{text}[/{color}]" if use_color else text
+
+
 def render_table(
     data: dict,
     verbose: bool = False,
@@ -83,17 +97,14 @@ def render_table(
             str(idx),
             resource_name,
             resource_type,
-            f"[{color}]{action_display}[/{color}]" if use_color else action_display,
+            _colorize(action_display, color, use_color),
         ]
 
         if ci_mode:
             risk_level = resource.get("risk_level", "none")
             _, risk_color = RISK_STYLES.get(risk_level, ("?", "white"))
             risk_display = risk_level.capitalize()
-            row.append(
-                f"[{risk_color}]{risk_display}[/{risk_color}]"
-                if use_color else risk_display
-            )
+            row.append(_colorize(risk_display, risk_color, use_color))
 
         row.append(summary)
         table.add_row(*row)
@@ -105,7 +116,8 @@ def render_table(
     # Print overall summary
     overall_summary = data.get("overall_summary", "")
     if overall_summary:
-        console.print(f"[bold]Summary:[/bold] {overall_summary}" if use_color else f"Summary: {overall_summary}")
+        summary_label = _colorize("Summary:", "bold", use_color)
+        console.print(f"{summary_label} {overall_summary}")
         console.print()
 
     # Print verbose details if requested
@@ -139,8 +151,8 @@ def _print_risk_bucket_summary(console: Console, risk_assessment: dict, use_colo
 
         bucket_table.add_row(
             "Infrastructure Drift",
-            f"[{risk_color}]{drift_risk.capitalize()}[/{risk_color}]" if use_color else drift_risk.capitalize(),
-            f"[{risk_color}]●[/{risk_color}]" if use_color else "●",
+            _colorize(drift_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
             concern_text
         )
 
@@ -154,16 +166,16 @@ def _print_risk_bucket_summary(console: Console, risk_assessment: dict, use_colo
 
         bucket_table.add_row(
             "PR Intent Alignment",
-            f"[{risk_color}]{intent_risk.capitalize()}[/{risk_color}]" if use_color else intent_risk.capitalize(),
-            f"[{risk_color}]●[/{risk_color}]" if use_color else "●",
+            _colorize(intent_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
             concern_text
         )
     else:
         # Intent bucket skipped
         bucket_table.add_row(
             "PR Intent Alignment",
-            "[dim]Not evaluated[/dim]" if use_color else "Not evaluated",
-            "[dim]—[/dim]" if use_color else "—",
+            _colorize("Not evaluated", "dim", use_color),
+            _colorize("—", "dim", use_color),
             "No PR metadata provided"
         )
 
@@ -177,8 +189,8 @@ def _print_risk_bucket_summary(console: Console, risk_assessment: dict, use_colo
 
         bucket_table.add_row(
             "Risky Operations",
-            f"[{risk_color}]{operations_risk.capitalize()}[/{risk_color}]" if use_color else operations_risk.capitalize(),
-            f"[{risk_color}]●[/{risk_color}]" if use_color else "●",
+            _colorize(operations_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
             concern_text
         )
 
@@ -192,12 +204,14 @@ def _print_verbose_details(console: Console, resources: list, use_color: bool) -
     modified_resources = [r for r in resources if r.get("action") == "Modify" and r.get("changes")]
 
     if modified_resources:
-        console.print("[bold]Property-Level Changes:[/bold]" if use_color else "Property-Level Changes:")
+        label = _colorize("Property-Level Changes:", "bold", use_color)
+        console.print(label)
         console.print()
 
         for resource in modified_resources:
             resource_name = resource.get("resource_name", "Unknown")
-            console.print(f"  [yellow]•[/yellow] {resource_name}:" if use_color else f"  • {resource_name}:")
+            bullet = _colorize("•", "yellow", use_color)
+            console.print(f"  {bullet} {resource_name}:")
 
             for change in resource.get("changes", []):
                 console.print(f"    - {change}")
@@ -223,28 +237,23 @@ def _print_ci_verdict(console: Console, verdict: dict, use_color: bool) -> None:
         verdict_text = "UNSAFE"
         verdict_style = "red bold"
 
-    console.print(
-        f"[{verdict_style}]Verdict: {verdict_text}[/{verdict_style}]"
-        if use_color else f"Verdict: {verdict_text}"
-    )
+    verdict_display = _colorize(f"Verdict: {verdict_text}", verdict_style, use_color)
+    console.print(verdict_display)
     console.print()
 
     # Overall risk level
-    console.print(
-        f"[bold]Overall Risk Level:[/bold] {overall_risk.capitalize()}"
-        if use_color else f"Overall Risk Level: {overall_risk.capitalize()}"
-    )
+    label = _colorize("Overall Risk Level:", "bold", use_color)
+    console.print(f"{label} {overall_risk.capitalize()}")
 
     # Highest risk bucket
     if highest_bucket != "none":
-        console.print(
-            f"[bold]Highest Risk Bucket:[/bold] {highest_bucket.capitalize()}"
-            if use_color else f"Highest Risk Bucket: {highest_bucket.capitalize()}"
-        )
+        label = _colorize("Highest Risk Bucket:", "bold", use_color)
+        console.print(f"{label} {highest_bucket.capitalize()}")
 
     # Reasoning
     if reasoning:
-        console.print(f"[bold]Reasoning:[/bold] {reasoning}" if use_color else f"Reasoning: {reasoning}")
+        label = _colorize("Reasoning:", "bold", use_color)
+        console.print(f"{label} {reasoning}")
 
     console.print()
 

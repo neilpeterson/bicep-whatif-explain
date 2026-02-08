@@ -6,6 +6,19 @@ from typing import Tuple, List, Dict, Any
 from .verdict import RISK_LEVELS
 
 
+def _validate_risk_level(risk_level: str) -> str:
+    """Validate and normalize risk level.
+
+    Args:
+        risk_level: Risk level string to validate
+
+    Returns:
+        Validated risk level, defaults to "low" if invalid
+    """
+    risk = risk_level.lower()
+    return risk if risk in RISK_LEVELS else "low"
+
+
 def evaluate_risk_buckets(
     data: dict,
     drift_threshold: str,
@@ -37,14 +50,9 @@ def evaluate_risk_buckets(
     intent_bucket = risk_assessment.get("intent")  # May be None if not evaluated
     operations_bucket = risk_assessment.get("operations", {})
 
-    # Validate risk levels and default to "low" if invalid
-    drift_risk = drift_bucket.get("risk_level", "low").lower()
-    operations_risk = operations_bucket.get("risk_level", "low").lower()
-
-    if drift_risk not in RISK_LEVELS:
-        drift_risk = "low"
-    if operations_risk not in RISK_LEVELS:
-        operations_risk = "low"
+    # Validate and normalize risk levels
+    drift_risk = _validate_risk_level(drift_bucket.get("risk_level", "low"))
+    operations_risk = _validate_risk_level(operations_bucket.get("risk_level", "low"))
 
     # Evaluate each bucket against its threshold
     failed_buckets = []
@@ -55,9 +63,7 @@ def evaluate_risk_buckets(
 
     # Intent bucket (only if evaluated)
     if intent_bucket is not None:
-        intent_risk = intent_bucket.get("risk_level", "low").lower()
-        if intent_risk not in RISK_LEVELS:
-            intent_risk = "low"
+        intent_risk = _validate_risk_level(intent_bucket.get("risk_level", "low"))
         if _exceeds_threshold(intent_risk, intent_threshold):
             failed_buckets.append("intent")
 
