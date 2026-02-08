@@ -1,3 +1,5 @@
+// test pipeline
+
 param apimName string
 
 @description('Name of the existing Application Insights logger in APIM')
