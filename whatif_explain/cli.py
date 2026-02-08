@@ -330,12 +330,20 @@ def _auto_detect_pr_metadata() -> tuple:
                     pr_description = pr_data.get("body")
 
                     if pr_title or pr_description:
-                        sys.stderr.write("Auto-detected PR metadata from GitHub event.\n")
+                        sys.stderr.write(
+                            "Auto-detected PR metadata from GitHub event.\n"
+                        )
                         if pr_title:
-                            sys.stderr.write(f"  Title: {pr_title[:60]}{'...' if len(pr_title) > 60 else ''}\n")
+                            title_ellipsis = '...' if len(pr_title) > 60 else ''
+                            sys.stderr.write(
+                                f"  Title: {pr_title[:60]}{title_ellipsis}\n"
+                            )
                         if pr_description:
                             desc_preview = pr_description[:60].replace('\n', ' ')
-                            sys.stderr.write(f"  Description: {desc_preview}{'...' if len(pr_description) > 60 else ''}\n")
+                            desc_ellipsis = '...' if len(pr_description) > 60 else ''
+                            sys.stderr.write(
+                                f"  Description: {desc_preview}{desc_ellipsis}\n"
+                            )
                         return pr_title, pr_description
             except (OSError, json.JSONDecodeError) as e:
                 sys.stderr.write(f"Warning: Could not read GitHub event data: {e}\n")
@@ -365,7 +373,10 @@ def _load_bicep_files(bicep_dir: str) -> Optional[str]:
         return None
 
     if not base_path.exists() or not base_path.is_dir():
-        sys.stderr.write(f"Warning: Bicep directory does not exist or is not a directory: {bicep_dir}\n")
+        sys.stderr.write(
+            f"Warning: Bicep directory does not exist or is not "
+            f"a directory: {bicep_dir}\n"
+        )
         return None
 
     # Find all .bicep files recursively
