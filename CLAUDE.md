@@ -72,6 +72,14 @@ pytest -k "test_name"               # Run specific test
 **Testing with fixtures:**
 ```bash
 cat tests/fixtures/create_only.txt | whatif-explain
+
+# Test CI mode:
+cat tests/fixtures/create_only.txt | whatif-explain \
+  --ci \
+  --drift-threshold high \
+  --intent-threshold high \
+  --operations-threshold high
+
 # Or run directly via Python module:
 cat tests/fixtures/create_only.txt | python -m whatif_explain.cli
 ```
@@ -87,7 +95,17 @@ ruff format .                       # Format code
 ### Two Operating Modes
 
 1. **Interactive Mode (default):** Reads What-If output from stdin, sends to LLM, displays formatted table/JSON/markdown
-2. **CI Mode (`--ci` flag):** Also accepts git diff, evaluates deployment safety, sets pass/fail exit codes, optionally posts PR comments
+2. **CI Mode (`--ci` flag):** Also accepts git diff, evaluates deployment safety across three risk buckets, sets pass/fail exit codes, optionally posts PR comments
+
+### Risk Bucket System (CI Mode)
+
+CI mode evaluates three independent risk categories:
+
+1. **Infrastructure Drift**: Compares What-If output to code diff to detect changes not in the PR (out-of-band modifications)
+2. **PR Intent Alignment**: Compares What-If output to PR title/description to catch unintended changes (optional - skipped if no PR metadata)
+3. **Risky Operations**: Evaluates inherent risk of Azure operations (deletions, security changes, etc.)
+
+Each bucket has an independent configurable threshold (low, medium, high). Deployment fails if ANY bucket exceeds its threshold.
 
 ### LLM Provider Interface
 
@@ -110,7 +128,7 @@ All providers use temperature 0 for deterministic output.
 
 ### Structured Response Format
 
-The LLM returns JSON with this schema:
+**Standard Mode:**
 
 ```json
 {
@@ -126,18 +144,60 @@ The LLM returns JSON with this schema:
 }
 ```
 
-In CI mode, additional fields are included:
-- `risk_level`: "none|low|medium|high|critical"
-- `risk_reason`: Explanation of risk
-- `verdict`: Object with safety assessment
+**CI Mode:**
+
+Per-resource fields include `risk_level` (low|medium|high) and `risk_reason`.
+
+Three-bucket risk assessment:
+
+```json
+{
+  "resources": [...],
+  "overall_summary": "string",
+  "risk_assessment": {
+    "drift": {
+      "risk_level": "low|medium|high",
+      "concerns": ["..."],
+      "reasoning": "..."
+    },
+    "intent": {
+      "risk_level": "low|medium|high",
+      "concerns": ["..."],
+      "reasoning": "..."
+    },
+    "operations": {
+      "risk_level": "low|medium|high",
+      "concerns": ["..."],
+      "reasoning": "..."
+    }
+  },
+  "verdict": {
+    "safe": true|false,
+    "highest_risk_bucket": "drift|intent|operations|none",
+    "overall_risk_level": "low|medium|high",
+    "reasoning": "..."
+  }
+}
+```
+
+**Note:** The `intent` bucket is only included if PR title/description are provided via `--pr-title` or `--pr-description` flags.
 
 ### Risk Classification (CI Mode)
 
-- **critical:** Deletion of stateful resources (databases, storage, key vaults), identity/RBAC deletions, broad network security changes
-- **high:** Production resource deletions, auth/authz modifications, firewall changes, SKU downgrades
-- **medium:** Behavioral changes to existing resources, new public endpoints
-- **low:** New resources, tags, monitoring resources, cosmetic changes
-- **none:** NoChange, Ignore actions
+**Infrastructure Drift Bucket:**
+- **High:** Critical resources drifting (security, identity, stateful), broad scope drift
+- **Medium:** Multiple resources drifting, important resource configuration drift
+- **Low:** Minor drift (tags, display names), single non-critical resource drift
+
+**PR Intent Alignment Bucket:**
+- **High:** Destructive changes not mentioned in PR, security/auth changes not mentioned
+- **Medium:** Modifications not aligned with PR intent, unexpected resource types
+- **Low:** New resources not mentioned but aligned with intent, minor scope differences
+
+**Risky Operations Bucket:**
+- **High:** Deletion of stateful resources (databases, storage, key vaults), RBAC deletions, broad network security changes, encryption changes, SKU downgrades
+- **Medium:** Behavioral changes to existing resources, new public endpoints, firewall changes, policy modifications
+- **Low:** New resources, tags, monitoring resources, cosmetic changes
 
 ## Sample Bicep Template
 
@@ -192,13 +252,29 @@ When implementing CI mode (`--ci` flag):
 
 1. Accept both What-If output and git diff as input
 2. Include source code context in prompt
-3. Return structured safety verdict with risk assessment
+3. Return structured safety verdict with three-bucket risk assessment
 4. Post formatted markdown comments to GitHub/Azure DevOps PRs
-5. Exit with code 0 (safe) or 1 (unsafe) based on `--risk-threshold`
+5. Exit with code 0 (safe) or 1 (unsafe) based on three independent thresholds:
+   - `--drift-threshold` (default: high)
+   - `--intent-threshold` (default: high)
+   - `--operations-threshold` (default: high)
 
 **Environment variables for PR comments:**
 - GitHub: `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `GITHUB_PR_NUMBER`
 - Azure DevOps: `SYSTEM_ACCESSTOKEN`, `SYSTEM_PULLREQUEST_PULLREQUESTID`
+
+**Sample CI command:**
+```bash
+cat whatif-output.txt | whatif-explain \
+  --ci \
+  --diff-ref origin/main \
+  --drift-threshold high \
+  --intent-threshold high \
+  --operations-threshold high \
+  --pr-title "Add monitoring resources" \
+  --pr-description "This PR adds Application Insights diagnostics" \
+  --post-comment
+```
 
 ## Testing Strategy
 

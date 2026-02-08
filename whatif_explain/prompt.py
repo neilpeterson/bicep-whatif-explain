@@ -66,64 +66,124 @@ def _build_ci_system_prompt(pr_title: str = None, pr_description: str = None) ->
     if pr_title or pr_description:
         base_prompt += '''\n3. The pull request title and description stating the INTENDED purpose of this change'''
 
-    base_prompt += '''\n\nEvaluate the deployment for safety and correctness.'''
+    base_prompt += '''\n\nEvaluate the deployment for safety and correctness across three independent risk buckets:'''
 
-    # Add intent analysis instructions if PR metadata is provided
-    intent_instructions = ""
+    # Build schema based on whether intent bucket is included
     if pr_title or pr_description:
-        intent_instructions = '''
+        risk_assessment_schema = '''"risk_assessment": {
+    "drift": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of specific drift concerns"],
+      "reasoning": "string — explanation of drift risk"
+    },
+    "intent": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of intent misalignment concerns"],
+      "reasoning": "string — explanation of intent risk"
+    },
+    "operations": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of risky operation concerns"],
+      "reasoning": "string — explanation of operations risk"
+    }
+  }'''
+    else:
+        risk_assessment_schema = '''"risk_assessment": {
+    "drift": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of specific drift concerns"],
+      "reasoning": "string — explanation of drift risk"
+    },
+    "operations": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of risky operation concerns"],
+      "reasoning": "string — explanation of operations risk"
+    }
+  }'''
 
-IMPORTANT - Intent Analysis:
-You have been provided with the pull request title and/or description. Use this to understand
-the STATED INTENT of the change. Flag any changes in the What-If output that:
+    # Build bucket-specific instructions
+    bucket_instructions = '''
+
+## Risk Bucket 1: Infrastructure Drift
+
+Compare the What-If output to the code diff. Identify any resources changing that are NOT modified in the diff.
+This indicates infrastructure drift (out-of-band changes made outside of this PR).
+
+Risk levels for drift:
+- high: Critical resources drifting (security rules, identity, stateful resources), broad scope drift
+- medium: Multiple resources drifting, configuration drift on important resources
+- low: Minor drift (tags, display names), single resource drift on non-critical resources
+
+## Risk Bucket 2: Risky Azure Operations
+
+Evaluate the inherent risk of the operations being performed, regardless of intent.
+
+Risk levels for operations:
+- high: Deletion of stateful resources (databases, storage accounts, key vaults), deletion of identity/RBAC resources,
+  changes to network security rules that open broad access, modifications to encryption settings, SKU downgrades
+- medium: Modifications to existing resources that change behavior (policy changes, scaling config),
+  new public endpoints, firewall rule changes
+- low: Adding new resources, adding tags, adding diagnostic/monitoring resources, modifying descriptions'''
+
+    # Add intent bucket instructions only if PR metadata provided
+    if pr_title or pr_description:
+        bucket_instructions += '''
+
+## Risk Bucket 3: Pull Request Intent Alignment
+
+Compare the What-If output to the PR title and description. Flag any changes that:
 - Are NOT mentioned in the PR description
 - Do not align with the stated purpose
 - Seem unrelated or unexpected given the PR intent
 - Are destructive (Delete actions) but not explicitly mentioned
 
-Treat intent mismatches as elevated risk:
-- Destructive changes (Delete) not mentioned in PR = CRITICAL risk
-- Security/auth changes not mentioned in PR = HIGH risk
-- Resource modifications not aligned with PR intent = MEDIUM risk
-- New resources not mentioned but aligned with intent = LOW risk'''
+Risk levels for intent:
+- high: Destructive changes (Delete) not mentioned in PR, security/auth changes not mentioned
+- medium: Resource modifications not aligned with PR intent, unexpected resource types
+- low: New resources not mentioned but aligned with intent, minor scope differences'''
+    else:
+        bucket_instructions += '''
 
-    return base_prompt + intent_instructions + '''
+## Risk Bucket 3: Pull Request Intent Alignment
+
+NOTE: PR title and description were not provided, so intent alignment analysis is SKIPPED.
+Do NOT include the "intent" bucket in your risk_assessment response.'''
+
+    # Build verdict schema
+    if pr_title or pr_description:
+        verdict_schema = '''"verdict": {
+    "safe": true/false,
+    "highest_risk_bucket": "drift|intent|operations|none",
+    "overall_risk_level": "low|medium|high",
+    "reasoning": "string — 2-3 sentence explanation considering all buckets"
+  }'''
+    else:
+        verdict_schema = '''"verdict": {
+    "safe": true/false,
+    "highest_risk_bucket": "drift|operations|none",
+    "overall_risk_level": "low|medium|high",
+    "reasoning": "string — 2-3 sentence explanation considering all buckets"
+  }'''
+
+    return base_prompt + bucket_instructions + f'''
 
 Respond with ONLY valid JSON matching this schema:
 
-{
+{{
   "resources": [
-    {
+    {{
       "resource_name": "string",
       "resource_type": "string",
       "action": "string — Create, Modify, Delete, Deploy, NoChange, Ignore",
       "summary": "string — what this change does",
-      "risk_level": "string — none, low, medium, high, critical",
+      "risk_level": "low|medium|high",
       "risk_reason": "string or null — why this is risky, if applicable"
-    }
+    }}
   ],
   "overall_summary": "string",
-  "verdict": {
-    "safe": true/false,
-    "risk_level": "string — none, low, medium, high, critical (highest individual risk)",
-    "reasoning": "string — 2-3 sentence explanation of the verdict",
-    "concerns": ["string — list of specific concerns, if any"],
-    "recommendations": ["string — list of recommendations, if any"]
-  }
-}
-
-Apply these risk classifications:
-
-- critical: Deletion of stateful resources (databases, storage accounts, key vaults),
-  deletion of identity/RBAC resources, changes to network security rules that open
-  broad access, modifications to encryption settings
-- high: Deletion of any production resource, modifications to authentication/authorization
-  config, changes to firewall rules, SKU downgrades on critical services
-- medium: Modifications to existing resources that change behavior (policy changes,
-  scaling config, diagnostic settings), new public endpoints
-- low: Adding new resources, adding tags, adding diagnostic/monitoring resources,
-  modifying descriptions or display names
-- none: NoChange, Ignore, cosmetic-only changes'''
+  {risk_assessment_schema},
+  {verdict_schema}
+}}'''
 
 
 def build_user_prompt(

@@ -90,10 +90,22 @@ def extract_json(text: str) -> dict:
     help="Git reference to diff against (default: HEAD~1)"
 )
 @click.option(
-    "--risk-threshold",
-    type=click.Choice(["low", "medium", "high", "critical"], case_sensitive=False),
+    "--drift-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default="high",
-    help="Fail pipeline at this risk level or above (CI mode only)"
+    help="Fail pipeline if drift risk meets or exceeds this level (CI mode only)"
+)
+@click.option(
+    "--intent-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default="high",
+    help="Fail pipeline if intent alignment risk meets or exceeds this level (CI mode only)"
+)
+@click.option(
+    "--operations-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default="high",
+    help="Fail pipeline if operations risk meets or exceeds this level (CI mode only)"
 )
 @click.option(
     "--post-comment",
@@ -134,7 +146,9 @@ def main(
     ci: bool,
     diff: str,
     diff_ref: str,
-    risk_threshold: str,
+    drift_threshold: str,
+    intent_threshold: str,
+    operations_threshold: str,
     post_comment: bool,
     pr_url: str,
     bicep_dir: str,
@@ -223,9 +237,11 @@ def main(
 
         # CI mode: evaluate verdict and post comment
         if ci:
-            from .ci.verdict import evaluate_verdict
+            from .ci.risk_buckets import evaluate_risk_buckets
 
-            is_safe, verdict = evaluate_verdict(data, risk_threshold)
+            is_safe, failed_buckets, risk_assessment = evaluate_risk_buckets(
+                data, drift_threshold, intent_threshold, operations_threshold
+            )
 
             # Post comment if requested
             if post_comment:
@@ -236,6 +252,10 @@ def main(
             if is_safe:
                 sys.exit(0)  # Safe to deploy
             else:
+                # Show which buckets failed
+                if failed_buckets:
+                    bucket_names = ", ".join(failed_buckets)
+                    sys.stderr.write(f"Deployment blocked: Failed risk buckets: {bucket_names}\n")
                 sys.exit(1)  # Unsafe, block deployment
 
         # Standard mode: exit successfully

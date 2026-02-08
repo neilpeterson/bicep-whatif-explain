@@ -265,19 +265,212 @@ az role assignment list --assignee $APP_ID -o table
 
 ## Optional: Add Pull Request Support
 
-To run deployments or What-If analysis on pull requests, add an additional federated credential:
+To run What-If analysis on pull requests (recommended for safety reviews), add an additional federated credential:
 
 **Subject identifier:** `repo:YOUR-USERNAME/bicep-whatif-explain:pull_request`
 
-Then update your workflow to trigger on `pull_request` events.
+```powershell
+# Add PR support federated credential
+$prCred = @{
+  name = "github-pr-support"
+  issuer = "https://token.actions.githubusercontent.com"
+  subject = "repo:$GITHUB_USERNAME/bicep-whatif-explain:pull_request"
+  audiences = @("api://AzureADTokenExchange")
+} | ConvertTo-Json -Compress
+
+az ad app federated-credential create --id $APP_ID --parameters $prCred
+```
+
+Then update your workflow to run on pull requests:
+
+```yaml
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bicep-sample/**'
+  push:
+    branches: [main]
+
+jobs:
+  whatif-review:
+    runs-on: ubuntu-latest
+    environment: azure-personal-subscription
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # ... Azure login and What-If steps ...
+
+      - name: AI Safety Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat whatif-output.txt | whatif-explain \
+            --ci \
+            --diff-ref origin/main \
+            --drift-threshold high \
+            --intent-threshold high \
+            --operations-threshold high \
+            --pr-title "${{ github.event.pull_request.title }}" \
+            --pr-description "${{ github.event.pull_request.body }}" \
+            --post-comment
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: whatif-review
+    if: github.ref == 'refs/heads/main'
+    environment: azure-personal-subscription
+    steps:
+      # ... actual deployment steps ...
+```
+
+This setup ensures:
+- Every PR gets AI-powered safety review
+- PR intent is compared against actual changes
+- Deployment only happens on main branch after review passes
 
 ## Next Steps
 
 Once your deployment workflow is working:
-- Add What-If analysis step before deployment
-- Integrate `whatif-explain` for AI-powered change summaries
+- Add What-If analysis with `whatif-explain` (see below)
 - Add deployment protection rules to the environment (require approvals)
 - Configure branch protection on main branch
+
+### Integrate whatif-explain for AI-Powered Safety Gates
+
+Add AI-powered deployment analysis to your workflow:
+
+#### 1. Add Anthropic API Key to Environment
+
+Go to **Settings → Environments → [your-environment]**:
+
+Add this secret:
+- **Secret Name:** `ANTHROPIC_API_KEY`
+- **Value:** Your Anthropic API key from https://console.anthropic.com/
+
+#### 2. Update Workflow with What-If Analysis
+
+Add this step before deployment:
+
+```yaml
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: azure-personal-subscription
+    permissions:
+      contents: read
+      pull-requests: write  # Required for PR comments
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Required for git diff analysis
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install whatif-explain
+        run: pip install whatif-explain[anthropic]
+
+      - name: Run What-If Analysis
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file bicep-sample/main.bicep \
+            --parameters bicep-sample/parameters.bicepparam \
+            --exclude-change-types NoChange Ignore \
+            > whatif-output.txt
+
+      - name: AI Safety Review & Deployment Gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat whatif-output.txt | whatif-explain \
+            --ci \
+            --diff-ref origin/main \
+            --drift-threshold high \
+            --intent-threshold high \
+            --operations-threshold high \
+            --post-comment \
+            --format markdown
+
+      - name: Deploy to Azure (only if safe)
+        if: success() && github.ref == 'refs/heads/main'
+        run: |
+          az deployment group create \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file bicep-sample/main.bicep \
+            --parameters bicep-sample/parameters.bicepparam
+```
+
+#### 3. Risk Bucket Configuration
+
+The three independent risk thresholds control deployment safety:
+
+**Production (Recommended):**
+```yaml
+--drift-threshold high \       # Block on infrastructure drift
+--intent-threshold high \      # Block on intent misalignment
+--operations-threshold high    # Block on dangerous operations
+```
+
+**Development/Staging:**
+```yaml
+--drift-threshold medium \
+--intent-threshold medium \
+--operations-threshold medium
+```
+
+**Strict (catch any drift):**
+```yaml
+--drift-threshold low \        # Very sensitive to drift
+--intent-threshold high \
+--operations-threshold high
+```
+
+#### 4. Expected PR Comment Output
+
+When a PR is created, `whatif-explain` will post a comment like:
+
+```markdown
+## What-If Deployment Review
+
+### Risk Assessment
+
+| Risk Bucket | Risk Level | Key Concerns |
+|-------------|------------|--------------|
+| Infrastructure Drift | Low | None |
+| PR Intent Alignment | Low | None |
+| Risky Operations | Low | None |
+
+### Resource Changes
+
+| # | Resource | Type | Action | Risk | Summary |
+|---|----------|------|--------|------|---------|
+| 1 | applicationinsights | APIM Diagnostic | Create | Low | Configures App Insights logging... |
+
+**Summary:** This deployment adds monitoring and diagnostic resources.
+
+### Verdict: ✅ SAFE
+
+**Overall Risk Level:** Low
+**Reasoning:** All changes are additive with no modifications to existing infrastructure.
+
+---
+*Generated by whatif-explain*
+```
+
+The workflow will:
+- ✅ **Pass** if all risk buckets are below their thresholds → Deployment proceeds
+- ❌ **Fail** if any bucket exceeds threshold → Deployment blocked, PR shows which bucket failed
 
 ## Additional Resources
 
