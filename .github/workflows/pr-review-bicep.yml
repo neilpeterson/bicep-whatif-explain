@@ -124,7 +124,7 @@ jobs:
           head -10 whatif-output.txt
 
           # Run whatif-explain in CI mode with PR intent analysis
-          set -x  # Enable command tracing
+          echo "Running whatif-explain command..."
           cat whatif-output.txt | whatif-explain \
             --ci \
             --diff-ref origin/main \
@@ -136,9 +136,9 @@ jobs:
             --pr-description "${{ steps.pr-details.outputs.pr_body }}" \
             --format markdown \
             > ai-analysis.md 2>&1
-          set +x  # Disable command tracing
 
           EXIT_CODE=$?
+          echo "Exit code: $EXIT_CODE"
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
 
           # Debug: Check if output was created
