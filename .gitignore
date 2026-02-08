@@ -46,7 +46,7 @@ coverage.xml
 .pytest_cache/
 
 # IDEs and editors
-.claude/
+.claude/settings.local.json
 .idea/
 .vscode/
 *.swp
