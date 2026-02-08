@@ -47,54 +47,76 @@ jobs:
       - name: Run What-If Analysis
         id: whatif
         run: |
-          az deployment group what-if \
+          echo "🔍 Running What-If analysis..."
+          echo "Resource Group: ${{ vars.AZURE_RESOURCE_GROUP }}"
+          echo "Template: ${{ env.BICEP_TEMPLATE }}"
+          echo "Parameters: ${{ env.BICEP_PARAMS }}"
+
+          # Run What-If and capture output AND errors
+          if az deployment group what-if \
             --name "bicep-whatif-pr-${{ github.event.pull_request.number }}" \
-            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
-            --template-file ${{ env.BICEP_TEMPLATE }} \
-            --parameters ${{ env.BICEP_PARAMS }} \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file "${{ env.BICEP_TEMPLATE }}" \
+            --parameters "${{ env.BICEP_PARAMS }}" \
             --exclude-change-types NoChange Ignore \
-            > whatif-output.txt
+            > whatif-output.txt 2>&1; then
 
-          echo "What-If analysis completed"
-          cat whatif-output.txt
+            echo "✅ What-If analysis completed successfully"
 
-      - name: Get PR Details
-        id: pr-details
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "📋 Fetching PR details for intent analysis..."
-          PR_TITLE=$(gh pr view ${{ github.event.pull_request.number }} --json title --jq '.title')
-          PR_BODY=$(gh pr view ${{ github.event.pull_request.number }} --json body --jq '.body')
-
-          echo "pr_title<<EOF" >> $GITHUB_OUTPUT
-          echo "$PR_TITLE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-          echo "pr_body<<EOF" >> $GITHUB_OUTPUT
-          echo "$PR_BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+            # Verify output has content
+            if [ ! -s whatif-output.txt ]; then
+              echo "⚠️ Warning: What-If output file is empty"
+              echo "File contents:"
+              cat whatif-output.txt
+            else
+              echo "Output file size: $(wc -l < whatif-output.txt) lines"
+              echo "First 20 lines:"
+              head -20 whatif-output.txt
+            fi
+          else
+            echo "❌ What-If analysis failed!"
+            echo "Error output:"
+            cat whatif-output.txt
+            exit 1
+          fi
 
       - name: Run AI Analysis
         id: ai-analysis
         continue-on-error: true
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🤖 Running AI analysis with intent validation..."
+          echo "🤖 Running AI analysis with three-bucket risk assessment..."
 
-          # Run whatif-explain in CI mode with PR intent analysis
-          cat whatif-output.txt | whatif-explain \
-            --ci \
-            --diff-ref origin/main \
-            --bicep-dir bicep-sample/ \
-            --pr-title "${{ steps.pr-details.outputs.pr_title }}" \
-            --pr-description "${{ steps.pr-details.outputs.pr_body }}" \
-            --format markdown \
-            > ai-analysis.md
+          # Debug: Show whatif-explain version and help
+          echo "Checking whatif-explain installation..."
+          whatif-explain --version || echo "Version check failed"
+
+          # Debug: Check if whatif-output.txt exists and has content
+          if [ ! -f whatif-output.txt ]; then
+            echo "❌ ERROR: whatif-output.txt not found"
+            exit 2
+          fi
+
+          echo "What-If output file size: $(wc -l < whatif-output.txt) lines"
+          echo "First 10 lines of What-If output:"
+          head -10 whatif-output.txt
+
+          # Run whatif-explain in CI mode
+          echo "Running whatif-explain command..."
+          cat whatif-output.txt | whatif-explain --ci --diff-ref origin/main --bicep-dir bicep-sample/ --drift-threshold high --intent-threshold high --operations-threshold high --format markdown > ai-analysis.md
 
           EXIT_CODE=$?
+          echo "Exit code: $EXIT_CODE"
           echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+
+          # Check if output was created
+          if [ -f ai-analysis.md ]; then
+            echo "✅ ai-analysis.md created ($(wc -l < ai-analysis.md) lines)"
+          else
+            echo "❌ ai-analysis.md was not created"
+          fi
 
           if [ $EXIT_CODE -eq 0 ]; then
             echo "✅ Deployment is safe to proceed"
@@ -103,7 +125,7 @@ jobs:
             echo "⚠️ High risk deployment detected"
             echo "verdict=unsafe" >> $GITHUB_OUTPUT
           else
-            echo "❌ AI analysis failed"
+            echo "❌ AI analysis failed with exit code $EXIT_CODE"
             echo "verdict=error" >> $GITHUB_OUTPUT
           fi
 
@@ -112,14 +134,23 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ -f ai-analysis.md ]; then
+          if [ -f ai-analysis.md ] && [ -s ai-analysis.md ]; then
             gh pr comment ${{ github.event.pull_request.number }} --body-file ai-analysis.md
             echo "✅ Posted analysis to PR #${{ github.event.pull_request.number }}"
           else
             echo "⚠️ No analysis output found, posting error message"
-            gh pr comment ${{ github.event.pull_request.number }} --body "## ❌ What-If Analysis Failed
+            cat > error-message.md << 'EOF'
+          ## ❌ What-If Analysis Failed
 
-            The AI analysis could not be completed. Check the [workflow logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+          The AI analysis could not be completed. This may be due to:
+          - Missing or invalid What-If output
+          - API key issues
+          - Network connectivity problems
+
+          Check the workflow logs for details.
+          EOF
+
+            gh pr comment ${{ github.event.pull_request.number }} --body-file error-message.md
           fi
 
       - name: Check Deployment Safety
@@ -133,5 +164,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: whatif-analysis
-          path: whatif-output.txt
+          path: |
+            whatif-output.txt
+            ai-analysis.md
           retention-days: 30

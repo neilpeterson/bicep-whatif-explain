@@ -29,7 +29,7 @@ az deployment group what-if -g my-rg -f main.bicep | whatif-explain
                │ pipe (stdin)
                ▼
 ┌─────────────────────────────────┐
-│        whatif-explain            │
+│        whatif-explain           │
 │                                 │
 │  1. Read stdin                  │
 │  2. Parse/validate input        │
@@ -385,26 +385,28 @@ Application Insights logging pipeline, secured behind Azure Front Door.
 
 ### Overview
 
-In CI mode, `whatif-explain` acts as an automated deployment gate. It sends both the **What-If output** and the **source code diff** to the LLM, which assesses whether the deployment is safe to proceed. The tool then sets a pass/fail exit code and posts a summary to the PR.
+In CI mode, `whatif-explain` acts as an automated deployment gate. It sends the **What-If output**, **source code diff**, and optionally **PR metadata** to the LLM, which assesses whether the deployment is safe to proceed across three independent risk buckets. The tool then sets a pass/fail exit code and posts a summary to the PR.
 
 ```
-┌──────────────────┐     ┌──────────────────┐
-│  Git Diff         │     │  What-If Output   │
-│  (code changes)   │     │  (infra changes)  │
-└────────┬─────────┘     └────────┬──────────┘
-         │                        │
-         └──────────┬─────────────┘
+┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
+│  Git Diff         │     │  What-If Output   │     │  PR Metadata      │
+│  (code changes)   │     │  (infra changes)  │     │  (optional)       │
+└────────┬─────────┘     └────────┬──────────┘     └────────┬──────────┘
+         │                        │                         │
+         └──────────┬─────────────┴─────────────────────────┘
                     ▼
          ┌─────────────────────┐
          │   whatif-explain     │
          │   --ci               │
          │                     │
-         │  LLM evaluates:     │
-         │  • Do infra changes │
-         │    match code intent?│
-         │  • Any risky deletes?│
-         │  • Any drift?       │
-         │  • Safety verdict   │
+         │  LLM evaluates 3    │
+         │  risk buckets:      │
+         │  1. Drift           │
+         │  2. Intent (opt.)   │
+         │  3. Operations      │
+         │                     │
+         │  All buckets must   │
+         │  pass thresholds    │
          └──────────┬──────────┘
                     │
               ┌─────┴──────┐
@@ -423,7 +425,11 @@ In CI mode, `whatif-explain` acts as an automated deployment gate. It sends both
 | `--ci` | | `false` | Enable CI mode: structured verdict, exit codes, and optional PR comment |
 | `--diff` | `-d` | Auto-detected | Path to a diff file, or `-` to read a second stdin. If not provided, attempts `git diff HEAD~1` |
 | `--diff-ref` | | `HEAD~1` | Git ref to diff against (e.g., `main`, `origin/main`, a commit SHA) |
-| `--risk-threshold` | | `high` | Fail pipeline at this risk level or above: `low`, `medium`, `high`, `critical` |
+| `--drift-threshold` | | `high` | Fail pipeline if drift risk is at this level or above: `low`, `medium`, `high` |
+| `--intent-threshold` | | `high` | Fail pipeline if intent risk is at this level or above: `low`, `medium`, `high` |
+| `--operations-threshold` | | `high` | Fail pipeline if operations risk is at this level or above: `low`, `medium`, `high` |
+| `--pr-title` | | None | PR title for intent analysis (enables intent bucket evaluation) |
+| `--pr-description` | | None | PR description for intent analysis (enables intent bucket evaluation) |
 | `--post-comment` | | `false` | Post the summary as a PR comment (requires `--pr-url` or auto-detection) |
 | `--pr-url` | | Auto-detected | PR URL for posting comments. Auto-detected from `GITHUB_*` or `BUILD_*` env vars |
 | `--bicep-dir` | | `.` | Path to Bicep source files (included as context for the LLM) |
@@ -438,8 +444,9 @@ In CI mode, the prompt is extended to include the code diff and request a safety
 You are an Azure infrastructure deployment safety reviewer. You are given:
 1. The Azure What-If output showing planned infrastructure changes
 2. The source code diff (Bicep/ARM template changes) that produced these changes
+3. The pull request title and description stating the INTENDED purpose of this change (if provided)
 
-Evaluate the deployment for safety and correctness.
+Evaluate the deployment for safety and correctness across three independent risk buckets.
 
 Respond with ONLY valid JSON matching this schema:
 
@@ -449,37 +456,77 @@ Respond with ONLY valid JSON matching this schema:
       "resource_name": "string",
       "resource_type": "string",
       "action": "string — Create, Modify, Delete, Deploy, NoChange, Ignore",
-      "summary": "string — what this change does",
-      "risk_level": "string — none, low, medium, high, critical",
-      "risk_reason": "string or null — why this is risky, if applicable"
+      "summary": "string — what this change does"
     }
   ],
   "overall_summary": "string",
+  "risk_assessment": {
+    "drift": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of specific drift concerns"],
+      "reasoning": "string — explanation of drift risk"
+    },
+    "intent": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of intent misalignment concerns"],
+      "reasoning": "string — explanation of intent risk"
+    },
+    "operations": {
+      "risk_level": "low|medium|high",
+      "concerns": ["string — list of risky operation concerns"],
+      "reasoning": "string — explanation of operations risk"
+    }
+  },
   "verdict": {
     "safe": true/false,
-    "risk_level": "string — none, low, medium, high, critical (highest individual risk)",
-    "reasoning": "string — 2-3 sentence explanation of the verdict",
-    "concerns": ["string — list of specific concerns, if any"],
-    "recommendations": ["string — list of recommendations, if any"]
+    "highest_risk_bucket": "drift|intent|operations|none",
+    "overall_risk_level": "low|medium|high",
+    "reasoning": "string — 2-3 sentence explanation considering all buckets"
   }
 }
+
+Note: If PR title/description are not provided, the "intent" bucket is omitted from risk_assessment,
+and "highest_risk_bucket" can only be "drift", "operations", or "none".
 ```
 
 #### Risk Classification Guidelines (included in prompt)
 
 ```
-Apply these risk classifications:
+## Risk Bucket 1: Infrastructure Drift
 
-- critical: Deletion of stateful resources (databases, storage accounts, key vaults),
-  deletion of identity/RBAC resources, changes to network security rules that open
-  broad access, modifications to encryption settings
-- high: Deletion of any production resource, modifications to authentication/authorization
-  config, changes to firewall rules, SKU downgrades on critical services
-- medium: Modifications to existing resources that change behavior (policy changes,
-  scaling config, diagnostic settings), new public endpoints
-- low: Adding new resources, adding tags, adding diagnostic/monitoring resources,
-  modifying descriptions or display names
-- none: NoChange, Ignore, cosmetic-only changes
+Check if What-If shows changes to resources that were NOT modified in the code diff.
+This indicates infrastructure drift (out-of-band changes made outside of this PR).
+
+Risk levels for drift:
+- high: Critical resources drifting (security rules, identity, stateful resources), broad scope drift
+- medium: Multiple resources drifting, configuration drift on important resources
+- low: Minor drift (tags, display names), single resource drift on non-critical resources
+
+## Risk Bucket 2: Risky Azure Operations
+
+Evaluate the inherent risk of the operations being performed, regardless of intent.
+
+Risk levels for operations:
+- high: Deletion of stateful resources (databases, storage accounts, key vaults), deletion of
+  identity/RBAC resources, changes to network security rules that open broad access, modifications
+  to encryption settings, SKU downgrades
+- medium: Modifications to existing resources that change behavior (policy changes, scaling config),
+  new public endpoints, firewall rule changes
+- low: Adding new resources, adding tags, adding diagnostic/monitoring resources, modifying descriptions
+
+## Risk Bucket 3: Pull Request Intent Alignment
+
+Compare What-If changes against the PR title and description. Flag changes that:
+- Seem unrelated or unexpected given the PR intent
+- Are destructive (Delete actions) but not explicitly mentioned
+
+Risk levels for intent:
+- high: Destructive changes (Delete) not mentioned in PR, security/auth changes not mentioned
+- medium: Resource modifications not aligned with PR intent, unexpected resource types
+- low: New resources not mentioned but aligned with intent, minor scope differences
+
+NOTE: If PR title and description were not provided, intent alignment analysis is SKIPPED.
+Do NOT include the "intent" bucket in your risk_assessment response.
 ```
 
 #### User Prompt (CI Mode)
@@ -504,9 +551,14 @@ Review this Azure deployment for safety.
 
 | Code | Meaning |
 |------|---------|
-| `0` | Safe — highest risk level is below `--risk-threshold` |
-| `1` | Unsafe — risk level meets or exceeds `--risk-threshold` |
+| `0` | Safe — all risk buckets are below their respective thresholds |
+| `1` | Unsafe — one or more risk buckets meet or exceed their thresholds |
 | `2` | Error — invalid input, API failure, or malformed response |
+
+The deployment is considered safe only if ALL evaluated buckets pass their thresholds:
+- Drift bucket risk < `--drift-threshold`
+- Operations bucket risk < `--operations-threshold`
+- Intent bucket risk < `--intent-threshold` (only evaluated if `--pr-title` or `--pr-description` provided)
 
 ### PR Comment Format
 
@@ -515,25 +567,40 @@ When `--post-comment` is set, the tool posts a markdown comment to the PR:
 ```markdown
 ## 🔍 What-If Deployment Review
 
-| # | Resource | Type | Action | Risk | Summary |
-|---|----------|------|--------|------|---------|
-| 1 | applicationinsights | APIM Diagnostic | ✅ Create | 🟢 Low | Configures App Insights logging... |
-| 2 | my-database | SQL Database | ❌ Delete | 🔴 Critical | Deletes production database... |
+### Risk Assessment Summary
+
+| Risk Bucket | Level | Status |
+|-------------|-------|--------|
+| Infrastructure Drift | 🟡 Medium | ⚠️ Warning |
+| Risky Operations | 🔴 High | ❌ Failed |
+| PR Intent Alignment | 🟢 Low | ✅ Passed |
 
 ### Verdict: ❌ UNSAFE
 
-**Risk Level:** Critical
-**Reasoning:** The deployment deletes a SQL database which is a stateful
-resource that cannot be easily recovered.
+**Highest Risk Bucket:** Operations (High)
+
+**Overall Reasoning:** The deployment includes deletion of a SQL database which is a stateful
+resource that cannot be easily recovered. This operations risk exceeds the high threshold.
 
 **Concerns:**
-- Deletion of `my-database` will result in permanent data loss
-- No backup or soft-delete configuration detected
+- **Operations:** Deletion of `my-database` will result in permanent data loss
+- **Drift:** 2 resources show configuration changes not present in the code diff
 
 **Recommendations:**
-- Verify this deletion is intentional
+- Verify database deletion is intentional
 - Ensure a recent backup exists before proceeding
+- Review drift on storage account and key vault
 - Consider enabling soft-delete on the database first
+
+---
+
+### Infrastructure Changes
+
+| # | Resource | Type | Action | Summary |
+|---|----------|------|--------|---------|
+| 1 | applicationinsights | APIM Diagnostic | ✅ Create | Configures App Insights logging... |
+| 2 | my-database | SQL Database | ❌ Delete | Deletes production database... |
+| 3 | storage-account | Storage Account | ✏️ Modify | Updates tier from Standard to Premium... |
 
 ---
 <details>
@@ -541,6 +608,7 @@ resource that cannot be easily recovered.
 
 - Removed `database.bicep` module reference from `main.bicep`
 - Modified `parameters.json` to remove database connection string
+- Updated storage account SKU parameter
 
 </details>
 
@@ -619,7 +687,11 @@ jobs:
             --ci \
             --diff-ref origin/main \
             --bicep-dir infra/ \
-            --risk-threshold high \
+            --drift-threshold high \
+            --intent-threshold high \
+            --operations-threshold high \
+            --pr-title "${{ github.event.pull_request.title }}" \
+            --pr-description "${{ github.event.pull_request.body }}" \
             --post-comment \
             --format markdown
 
@@ -679,7 +751,11 @@ stages:
                   --ci \
                   --diff-ref origin/main \
                   --bicep-dir infra/ \
-                  --risk-threshold high \
+                  --drift-threshold high \
+                  --intent-threshold high \
+                  --operations-threshold high \
+                  --pr-title "$(System.PullRequest.Title)" \
+                  --pr-description "$(System.PullRequest.Description)" \
                   --post-comment \
                   --format markdown
 
@@ -722,7 +798,8 @@ whatif-explain/
 │   ├── ci/
 │   │   ├── __init__.py
 │   │   ├── diff.py         # Git diff collection and parsing
-│   │   ├── verdict.py      # Safety verdict evaluation and threshold comparison
+│   │   ├── verdict.py      # Risk level constants
+│   │   ├── risk_buckets.py # Risk bucket evaluation and threshold comparison
 │   │   ├── github.py       # GitHub PR comment posting
 │   │   └── azdevops.py     # Azure DevOps PR comment posting
 │   └── render.py           # Output formatting (table, json, markdown)

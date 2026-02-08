@@ -2,7 +2,6 @@
 
 import sys
 import json
-import re
 from typing import Optional
 import click
 from . import __version__
@@ -30,14 +29,47 @@ def extract_json(text: str) -> dict:
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON in the text (look for {...})
-    # Match the outermost braces
-    match = re.search(r'\{(?:[^{}]|(?:\{[^{}]*\}))*\}', text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError:
-            pass
+    # Try to find JSON in the text by looking for balanced braces
+    # This handles deeply nested JSON properly
+    start = text.find('{')
+    if start == -1:
+        raise ValueError("Could not extract valid JSON from LLM response")
+
+    # Find the matching closing brace
+    brace_count = 0
+    in_string = False
+    escape_next = False
+
+    for i in range(start, len(text)):
+        char = text[i]
+
+        if escape_next:
+            escape_next = False
+            continue
+
+        if char == '\\':
+            escape_next = True
+            continue
+
+        if char == '"' and not escape_next:
+            in_string = not in_string
+            continue
+
+        if in_string:
+            continue
+
+        if char == '{':
+            brace_count += 1
+        elif char == '}':
+            brace_count -= 1
+            if brace_count == 0:
+                # Found the matching closing brace
+                json_str = text[start:i+1]
+                try:
+                    return json.loads(json_str)
+                except json.JSONDecodeError:
+                    pass
+                break
 
     # Failed to extract JSON
     raise ValueError("Could not extract valid JSON from LLM response")
@@ -90,10 +122,22 @@ def extract_json(text: str) -> dict:
     help="Git reference to diff against (default: HEAD~1)"
 )
 @click.option(
-    "--risk-threshold",
-    type=click.Choice(["low", "medium", "high", "critical"], case_sensitive=False),
+    "--drift-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
     default="high",
-    help="Fail pipeline at this risk level or above (CI mode only)"
+    help="Fail pipeline if drift risk meets or exceeds this level (CI mode only)"
+)
+@click.option(
+    "--intent-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default="high",
+    help="Fail pipeline if intent alignment risk meets or exceeds this level (CI mode only)"
+)
+@click.option(
+    "--operations-threshold",
+    type=click.Choice(["low", "medium", "high"], case_sensitive=False),
+    default="high",
+    help="Fail pipeline if operations risk meets or exceeds this level (CI mode only)"
 )
 @click.option(
     "--post-comment",
@@ -134,7 +178,9 @@ def main(
     ci: bool,
     diff: str,
     diff_ref: str,
-    risk_threshold: str,
+    drift_threshold: str,
+    intent_threshold: str,
+    operations_threshold: str,
     post_comment: bool,
     pr_url: str,
     bicep_dir: str,
@@ -169,6 +215,10 @@ def main(
             # Optionally load Bicep source files
             if bicep_dir:
                 bicep_content = _load_bicep_files(bicep_dir)
+
+            # Auto-detect PR metadata if not provided
+            if not pr_title and not pr_description:
+                pr_title, pr_description = _auto_detect_pr_metadata()
 
         # Get provider
         llm_provider = get_provider(provider, model)
@@ -223,9 +273,11 @@ def main(
 
         # CI mode: evaluate verdict and post comment
         if ci:
-            from .ci.verdict import evaluate_verdict
+            from .ci.risk_buckets import evaluate_risk_buckets
 
-            is_safe, verdict = evaluate_verdict(data, risk_threshold)
+            is_safe, failed_buckets, risk_assessment = evaluate_risk_buckets(
+                data, drift_threshold, intent_threshold, operations_threshold
+            )
 
             # Post comment if requested
             if post_comment:
@@ -236,6 +288,10 @@ def main(
             if is_safe:
                 sys.exit(0)  # Safe to deploy
             else:
+                # Show which buckets failed
+                if failed_buckets:
+                    bucket_names = ", ".join(failed_buckets)
+                    sys.stderr.write(f"Deployment blocked: Failed risk buckets: {bucket_names}\n")
                 sys.exit(1)  # Unsafe, block deployment
 
         # Standard mode: exit successfully
@@ -252,6 +308,50 @@ def main(
     except Exception as e:
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
+
+
+def _auto_detect_pr_metadata() -> tuple:
+    """Auto-detect PR title and description from GitHub environment.
+
+    Returns:
+        Tuple of (pr_title, pr_description), both may be None
+    """
+    import os
+
+    # Try GitHub Actions environment
+    if os.environ.get("GITHUB_EVENT_NAME") in ["pull_request", "pull_request_target"]:
+        event_path = os.environ.get("GITHUB_EVENT_PATH")
+        if event_path and os.path.exists(event_path):
+            try:
+                with open(event_path, 'r', encoding='utf-8') as f:
+                    event_data = json.load(f)
+                    pr_data = event_data.get("pull_request", {})
+                    pr_title = pr_data.get("title")
+                    pr_description = pr_data.get("body")
+
+                    if pr_title or pr_description:
+                        sys.stderr.write(
+                            "Auto-detected PR metadata from GitHub event.\n"
+                        )
+                        if pr_title:
+                            title_ellipsis = '...' if len(pr_title) > 60 else ''
+                            sys.stderr.write(
+                                f"  Title: {pr_title[:60]}{title_ellipsis}\n"
+                            )
+                        if pr_description:
+                            desc_preview = pr_description[:60].replace('\n', ' ')
+                            desc_ellipsis = '...' if len(pr_description) > 60 else ''
+                            sys.stderr.write(
+                                f"  Description: {desc_preview}{desc_ellipsis}\n"
+                            )
+                        return pr_title, pr_description
+            except (OSError, json.JSONDecodeError) as e:
+                sys.stderr.write(f"Warning: Could not read GitHub event data: {e}\n")
+
+    # Try Azure DevOps environment
+    # TODO: Add Azure DevOps support if needed
+
+    return None, None
 
 
 def _load_bicep_files(bicep_dir: str) -> Optional[str]:
@@ -273,7 +373,10 @@ def _load_bicep_files(bicep_dir: str) -> Optional[str]:
         return None
 
     if not base_path.exists() or not base_path.is_dir():
-        sys.stderr.write(f"Warning: Bicep directory does not exist or is not a directory: {bicep_dir}\n")
+        sys.stderr.write(
+            f"Warning: Bicep directory does not exist or is not "
+            f"a directory: {bicep_dir}\n"
+        )
         return None
 
     # Find all .bicep files recursively

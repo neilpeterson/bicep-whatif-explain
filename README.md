@@ -6,12 +6,15 @@
 
 ## Features
 
-- 📊 **Human-Friendly Summaries** - Colored tables with plain English explanations of infrastructure changes
-- 🔒 **Deployment Safety Gates** - Automated risk assessment for CI/CD pipelines
-- 🤖 **Multiple LLM Providers** - Anthropic Claude, Azure OpenAI, or local Ollama
-- 📝 **Multiple Output Formats** - Table, JSON, or Markdown
-- 🚦 **PR Integration** - Post summaries directly to GitHub or Azure DevOps pull requests
-- ⚡ **Fast & Lightweight** - Minimal dependencies, works anywhere Python runs
+- **Human-Friendly Summaries** - Colored tables with plain English explanations of infrastructure changes
+- **Deployment Safety Gates** - Three independent risk assessments with configurable thresholds:
+  - Infrastructure Drift Detection - Identifies changes not present in your code (out-of-band modifications)
+  - PR Intent Analysis - Compares actual changes against PR description to catch unintended modifications
+  - Risky Operations Detection - Flags dangerous operations (deletions, security changes, public endpoints)
+- **Multiple LLM Providers** - Anthropic Claude, Azure OpenAI, or local Ollama
+- **Multiple Output Formats** - Table, JSON, or Markdown
+- **PR Integration** - Post summaries directly to GitHub or Azure DevOps pull requests
+- **Fast & Lightweight** - Minimal dependencies, works anywhere Python runs
 
 ## Quick Start
 
@@ -87,7 +90,7 @@ az deployment group what-if ... | whatif-explain
 
 ### CI Mode (--ci)
 
-For CI/CD pipelines. Acts as an automated deployment safety gate with risk assessment.
+For CI/CD pipelines. Acts as an automated deployment safety gate with three-bucket risk assessment.
 
 ```bash
 # Run What-If and save output
@@ -95,35 +98,38 @@ az deployment group what-if \
   --resource-group my-rg \
   --template-file main.bicep > whatif-output.txt
 
-# Analyze with CI mode
+# Analyze with CI mode (three independent risk thresholds)
 cat whatif-output.txt | whatif-explain \
   --ci \
   --diff-ref origin/main \
-  --risk-threshold high
+  --drift-threshold high \
+  --intent-threshold high \
+  --operations-threshold high
 
 # Use exit code to gate deployment
 if [ $? -eq 0 ]; then
   az deployment group create --resource-group my-rg --template-file main.bicep
 else
-  echo "❌ Deployment blocked due to high risk"
+  echo "❌ Deployment blocked - check which risk bucket failed"
   exit 1
 fi
 ```
 
 **Features:** Everything in Standard Mode, plus:
-- Risk assessment (none/low/medium/high/critical)
-- Git diff analysis
-- PR intent validation
-- Deployment verdicts with configurable thresholds
+- **Three-bucket risk assessment** (drift, intent alignment, risky operations)
+- Git diff analysis to detect infrastructure drift
+- PR intent validation (compares changes to PR description)
+- Independent thresholds for each risk category
+- Deployment verdicts with configurable sensitivity
 - Exit code 0 (safe) or 1 (unsafe)
 - Optional PR comment posting
 
-**Risk Levels:**
-- 🔴 **CRITICAL** - Database/storage deletions, RBAC changes, encryption changes
-- 🟠 **HIGH** - Production deletions, firewall changes, auth modifications
-- 🟡 **MEDIUM** - Behavioral changes, new public endpoints
-- 🟢 **LOW** - New resources, tags, monitoring resources
-- ⚪ **NONE** - NoChange, Ignore actions
+**Risk Buckets:**
+- 🔄 **Infrastructure Drift** - Detects changes not in your code diff (out-of-band modifications)
+- 🎯 **PR Intent Alignment** - Ensures changes match PR description (optional)
+- ⚠️ **Risky Operations** - Identifies dangerous Azure operations (deletions, security changes)
+
+**Risk Levels per Bucket:** Low, Medium, High (deployment fails if ANY bucket exceeds its threshold)
 
 ## Common Options
 
@@ -139,8 +145,11 @@ whatif-explain --provider ollama
 # Show property-level details
 whatif-explain --verbose
 
-# CI mode with custom threshold
-whatif-explain --ci --risk-threshold medium
+# CI mode with custom thresholds (three independent buckets)
+whatif-explain --ci \
+  --drift-threshold low \
+  --intent-threshold medium \
+  --operations-threshold high
 ```
 
 ## Environment Variables
@@ -180,16 +189,17 @@ export OLLAMA_HOST="http://localhost:11434"  # Optional
 - name: AI Safety Analysis
   env:
     ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   run: |
     az deployment group what-if ... > whatif-output.txt
     cat whatif-output.txt | whatif-explain \
       --ci \
       --diff-ref origin/main \
-      --risk-threshold high \
-      --format markdown > analysis.md
-
-- name: Post PR Comment
-  run: gh pr comment ${{ github.event.pull_request.number }} --body-file analysis.md
+      --drift-threshold high \
+      --intent-threshold high \
+      --operations-threshold high \
+      --post-comment \
+      --format markdown
 ```
 
 ### Azure DevOps
@@ -200,39 +210,15 @@ export OLLAMA_HOST="http://localhost:11434"  # Optional
     cat whatif-output.txt | whatif-explain \
       --ci \
       --diff-ref origin/main \
-      --risk-threshold high
+      --drift-threshold high \
+      --intent-threshold high \
+      --operations-threshold high
   env:
     ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+    SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 ```
 
 See [PIPELINE.md](docs/PIPELINE.md) for complete CI/CD integration guides and [REFERENCE.md](docs/REFERENCE.md) for detailed configuration options and examples.
-
-## Troubleshooting
-
-**"No input detected" error**
-
-Make sure you're piping What-If output:
-```bash
-# ❌ Wrong
-whatif-explain
-
-# ✅ Correct
-az deployment group what-if ... | whatif-explain
-```
-
-**"API key not set" error**
-
-Set your API key:
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-**Using Ollama**
-
-Make sure Ollama is running:
-```bash
-ollama serve
-```
 
 ## Documentation
 

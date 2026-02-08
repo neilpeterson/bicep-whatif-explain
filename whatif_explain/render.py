@@ -20,12 +20,24 @@ ACTION_STYLES = {
 
 # Risk level symbols and colors for CI mode
 RISK_STYLES = {
-    "critical": ("🔴", "red bold"),
     "high": ("🔴", "red"),
     "medium": ("🟡", "yellow"),
     "low": ("🟢", "green"),
-    "none": ("⚪", "dim"),
 }
+
+
+def _colorize(text: str, color: str, use_color: bool) -> str:
+    """Apply color formatting if use_color is True.
+
+    Args:
+        text: Text to colorize
+        color: Color name (e.g., "red", "green", "yellow")
+        use_color: Whether to apply color formatting
+
+    Returns:
+        Formatted text with color markup if use_color, otherwise plain text
+    """
+    return f"[{color}]{text}[/{color}]" if use_color else text
 
 
 def render_table(
@@ -50,6 +62,10 @@ def render_table(
     reduced_width = int(terminal_width * 0.85)
 
     console = Console(force_terminal=use_color, no_color=not use_color, width=reduced_width)
+
+    # Print risk bucket summary first in CI mode
+    if ci_mode:
+        _print_risk_bucket_summary(console, data.get("risk_assessment", {}), use_color)
 
     # Create table
     table = Table(box=box.ROUNDED, show_lines=True, padding=(0, 1))
@@ -81,17 +97,14 @@ def render_table(
             str(idx),
             resource_name,
             resource_type,
-            f"[{color}]{action_display}[/{color}]" if use_color else action_display,
+            _colorize(action_display, color, use_color),
         ]
 
         if ci_mode:
             risk_level = resource.get("risk_level", "none")
             _, risk_color = RISK_STYLES.get(risk_level, ("?", "white"))
             risk_display = risk_level.capitalize()
-            row.append(
-                f"[{risk_color}]{risk_display}[/{risk_color}]"
-                if use_color else risk_display
-            )
+            row.append(_colorize(risk_display, risk_color, use_color))
 
         row.append(summary)
         table.add_row(*row)
@@ -103,7 +116,8 @@ def render_table(
     # Print overall summary
     overall_summary = data.get("overall_summary", "")
     if overall_summary:
-        console.print(f"[bold]Summary:[/bold] {overall_summary}" if use_color else f"Summary: {overall_summary}")
+        summary_label = _colorize("Summary:", "bold", use_color)
+        console.print(f"{summary_label} {overall_summary}")
         console.print()
 
     # Print verbose details if requested
@@ -115,17 +129,89 @@ def render_table(
         _print_ci_verdict(console, data.get("verdict", {}), use_color)
 
 
+def _print_risk_bucket_summary(console: Console, risk_assessment: dict, use_color: bool) -> None:
+    """Print risk bucket summary table in CI mode."""
+    if not risk_assessment:
+        return
+
+    # Create risk bucket table
+    bucket_table = Table(box=box.ROUNDED, show_header=True, padding=(0, 1))
+    bucket_table.add_column("Risk Bucket", style="bold")
+    bucket_table.add_column("Risk Level", justify="center")
+    bucket_table.add_column("Status", justify="center")
+    bucket_table.add_column("Key Concerns")
+
+    # Drift bucket
+    drift = risk_assessment.get("drift", {})
+    if drift:
+        drift_risk = drift.get("risk_level", "low")
+        _, risk_color = RISK_STYLES.get(drift_risk, ("?", "white"))
+        concerns = drift.get("concerns", [])
+        concern_text = concerns[0] if concerns else "None"
+
+        bucket_table.add_row(
+            "Infrastructure Drift",
+            _colorize(drift_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
+            concern_text
+        )
+
+    # Intent bucket (may not exist if PR metadata not provided)
+    intent = risk_assessment.get("intent")
+    if intent is not None:
+        intent_risk = intent.get("risk_level", "low")
+        _, risk_color = RISK_STYLES.get(intent_risk, ("?", "white"))
+        concerns = intent.get("concerns", [])
+        concern_text = concerns[0] if concerns else "None"
+
+        bucket_table.add_row(
+            "PR Intent Alignment",
+            _colorize(intent_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
+            concern_text
+        )
+    else:
+        # Intent bucket skipped
+        bucket_table.add_row(
+            "PR Intent Alignment",
+            _colorize("Not evaluated", "dim", use_color),
+            _colorize("—", "dim", use_color),
+            "No PR metadata provided"
+        )
+
+    # Operations bucket
+    operations = risk_assessment.get("operations", {})
+    if operations:
+        operations_risk = operations.get("risk_level", "low")
+        _, risk_color = RISK_STYLES.get(operations_risk, ("?", "white"))
+        concerns = operations.get("concerns", [])
+        concern_text = concerns[0] if concerns else "None"
+
+        bucket_table.add_row(
+            "Risky Operations",
+            _colorize(operations_risk.capitalize(), risk_color, use_color),
+            _colorize("●", risk_color, use_color),
+            concern_text
+        )
+
+    # Print the bucket table
+    console.print(bucket_table)
+    console.print()
+
+
 def _print_verbose_details(console: Console, resources: list, use_color: bool) -> None:
     """Print verbose property-level change details."""
     modified_resources = [r for r in resources if r.get("action") == "Modify" and r.get("changes")]
 
     if modified_resources:
-        console.print("[bold]Property-Level Changes:[/bold]" if use_color else "Property-Level Changes:")
+        label = _colorize("Property-Level Changes:", "bold", use_color)
+        console.print(label)
         console.print()
 
         for resource in modified_resources:
             resource_name = resource.get("resource_name", "Unknown")
-            console.print(f"  [yellow]•[/yellow] {resource_name}:" if use_color else f"  • {resource_name}:")
+            bullet = _colorize("•", "yellow", use_color)
+            console.print(f"  {bullet} {resource_name}:")
 
             for change in resource.get("changes", []):
                 console.print(f"    - {change}")
@@ -134,15 +220,14 @@ def _print_verbose_details(console: Console, resources: list, use_color: bool) -
 
 
 def _print_ci_verdict(console: Console, verdict: dict, use_color: bool) -> None:
-    """Print CI mode verdict, concerns, and recommendations."""
+    """Print CI mode verdict."""
     if not verdict:
         return
 
     safe = verdict.get("safe", True)
-    risk_level = verdict.get("risk_level", "none")
+    overall_risk = verdict.get("overall_risk_level", "low")
+    highest_bucket = verdict.get("highest_risk_bucket", "none")
     reasoning = verdict.get("reasoning", "")
-    concerns = verdict.get("concerns", [])
-    recommendations = verdict.get("recommendations", [])
 
     # Verdict header
     if safe:
@@ -152,34 +237,25 @@ def _print_ci_verdict(console: Console, verdict: dict, use_color: bool) -> None:
         verdict_text = "UNSAFE"
         verdict_style = "red bold"
 
-    console.print(
-        f"[{verdict_style}]Verdict: {verdict_text}[/{verdict_style}]"
-        if use_color else f"Verdict: {verdict_text}"
-    )
+    verdict_display = _colorize(f"Verdict: {verdict_text}", verdict_style, use_color)
+    console.print(verdict_display)
     console.print()
 
-    # Risk level
-    console.print(f"[bold]Risk Level:[/bold] {risk_level.capitalize()}" if use_color else f"Risk Level: {risk_level.capitalize()}")
+    # Overall risk level
+    label = _colorize("Overall Risk Level:", "bold", use_color)
+    console.print(f"{label} {overall_risk.capitalize()}")
+
+    # Highest risk bucket
+    if highest_bucket != "none":
+        label = _colorize("Highest Risk Bucket:", "bold", use_color)
+        console.print(f"{label} {highest_bucket.capitalize()}")
 
     # Reasoning
     if reasoning:
-        console.print(f"[bold]Reasoning:[/bold] {reasoning}" if use_color else f"Reasoning: {reasoning}")
+        label = _colorize("Reasoning:", "bold", use_color)
+        console.print(f"{label} {reasoning}")
 
     console.print()
-
-    # Concerns
-    if concerns:
-        console.print("[bold red]Concerns:[/bold red]" if use_color else "Concerns:")
-        for concern in concerns:
-            console.print(f"  - {concern}")
-        console.print()
-
-    # Recommendations
-    if recommendations:
-        console.print("[bold yellow]Recommendations:[/bold yellow]" if use_color else "Recommendations:")
-        for rec in recommendations:
-            console.print(f"  - {rec}")
-        console.print()
 
 
 def render_json(data: dict) -> None:
@@ -206,6 +282,44 @@ def render_markdown(data: dict, ci_mode: bool = False) -> str:
     if ci_mode:
         lines.append("## What-If Deployment Review")
         lines.append("")
+
+        # Add risk bucket summary
+        risk_assessment = data.get("risk_assessment", {})
+        if risk_assessment:
+            lines.append("### Risk Assessment")
+            lines.append("")
+            lines.append("| Risk Bucket | Risk Level | Key Concerns |")
+            lines.append("|-------------|------------|--------------|")
+
+            # Drift bucket
+            drift = risk_assessment.get("drift", {})
+            if drift:
+                drift_risk = drift.get("risk_level", "low").capitalize()
+                concerns = drift.get("concerns", [])
+                concern_text = concerns[0] if concerns else "None"
+                lines.append(f"| Infrastructure Drift | {drift_risk} | {concern_text} |")
+
+            # Intent bucket (may not exist)
+            intent = risk_assessment.get("intent")
+            if intent is not None:
+                intent_risk = intent.get("risk_level", "low").capitalize()
+                concerns = intent.get("concerns", [])
+                concern_text = concerns[0] if concerns else "None"
+                lines.append(f"| PR Intent Alignment | {intent_risk} | {concern_text} |")
+            else:
+                lines.append("| PR Intent Alignment | Not evaluated | No PR metadata provided |")
+
+            # Operations bucket
+            operations = risk_assessment.get("operations", {})
+            if operations:
+                operations_risk = operations.get("risk_level", "low").capitalize()
+                concerns = operations.get("concerns", [])
+                concern_text = concerns[0] if concerns else "None"
+                lines.append(f"| Risky Operations | {operations_risk} | {concern_text} |")
+
+            lines.append("")
+            lines.append("### Resource Changes")
+            lines.append("")
 
     # Table header
     if ci_mode:
@@ -250,32 +364,21 @@ def render_markdown(data: dict, ci_mode: bool = False) -> str:
         verdict = data.get("verdict", {})
         if verdict:
             safe = verdict.get("safe", True)
-            risk_level = verdict.get("risk_level", "none")
+            overall_risk = verdict.get("overall_risk_level", "low")
+            highest_bucket = verdict.get("highest_risk_bucket", "none")
             reasoning = verdict.get("reasoning", "")
-            concerns = verdict.get("concerns", [])
-            recommendations = verdict.get("recommendations", [])
 
             # Verdict header
-            verdict_text = "SAFE" if safe else "UNSAFE"
+            verdict_text = "✅ SAFE" if safe else "❌ UNSAFE"
             lines.append(f"### Verdict: {verdict_text}")
             lines.append("")
 
-            lines.append(f"**Risk Level:** {risk_level.capitalize()}")
+            lines.append(f"**Overall Risk Level:** {overall_risk.capitalize()}")
+            if highest_bucket != "none":
+                lines.append(f"**Highest Risk Bucket:** {highest_bucket.capitalize()}")
             if reasoning:
                 lines.append(f"**Reasoning:** {reasoning}")
             lines.append("")
-
-            if concerns:
-                lines.append("**Concerns:**")
-                for concern in concerns:
-                    lines.append(f"- {concern}")
-                lines.append("")
-
-            if recommendations:
-                lines.append("**Recommendations:**")
-                for rec in recommendations:
-                    lines.append(f"- {rec}")
-                lines.append("")
 
     if ci_mode:
         lines.append("---")
