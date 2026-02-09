@@ -11,9 +11,8 @@
 <policies>
     <inbound>
         <check-header name="X-Azure-FDID" failed-check-httpcode="403" failed-check-error-message="Invalid request." ignore-case="false">
-            {FRONTDOOR_IDS}
+            "b1229122-1800-4049-b731-f311dd14e19a"
         </check-header>
-        <include-fragment fragment-id="sce-jwt-parsing-and-logging" />
     </inbound>
     <backend>
         <forward-request />

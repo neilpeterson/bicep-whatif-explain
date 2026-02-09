@@ -46,6 +46,58 @@ resource apimDiagnosticsAppInsights 'Microsoft.ApiManagement/service/diagnostics
   }
 }
 
+
+
+// Basic API deployment
+resource demoApi 'Microsoft.ApiManagement/service/apis@2022-08-01' = {
+  parent: apiManagementInstance
+  name: 'demo-api'
+  properties: {
+    displayName: 'Demo API'
+    description: 'A demo API for testing purposes'
+    path: 'demo'
+    protocols: [
+      'https'
+    ]
+    subscriptionRequired: true
+    serviceUrl: 'https://backend-api.contoso.com/v1'
+  }
+}
+
+// Backend for the API
+resource demoBackend 'Microsoft.ApiManagement/service/backends@2022-08-01' = {
+  parent: apiManagementInstance
+  name: 'demo-backend'
+  properties: {
+    title: 'Demo Backend Service'
+    description: 'Backend service for demo API'
+    url: 'https://backend-api.contoso.com'
+    protocol: 'http'
+    tls: {
+      validateCertificateChain: true
+      validateCertificateName: true
+    }
+  }
+}
+
+// Sample operation for the API
+resource demoOperation 'Microsoft.ApiManagement/service/apis/operations@2022-08-01' = {
+  parent: demoApi
+  name: 'get-items'
+  properties: {
+    displayName: 'Get Items'
+    method: 'GET'
+    urlTemplate: '/items'
+    description: 'Retrieves a list of items'
+    responses: [
+      {
+        statusCode: 200
+        description: 'Success'
+      }
+    ]
+  }
+}
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2025-01-01' = {
   name: storageAccountName
   location: 'centralus'
