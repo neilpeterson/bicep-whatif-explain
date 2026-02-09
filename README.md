@@ -183,7 +183,7 @@ whatif-explain \
 
 ## CI/CD Integration Examples
 
-### GitHub Actions (Simplified)
+### GitHub Actions
 
 Complete workflow in ~50 lines:
 
@@ -232,7 +232,7 @@ jobs:
 
 **That's it!** Auto-detects everything: CI mode, PR metadata, diff reference, and posts comments.
 
-### Azure DevOps (Simplified)
+### Azure DevOps
 
 ```yaml
 - script: |
