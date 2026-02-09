@@ -1,162 +1,155 @@
 # CI/CD Pipeline Integration
 
-This guide shows how to integrate `whatif-explain` into your CI/CD pipelines as an automated deployment gate.
+Integration guide for using `whatif-explain` as an automated deployment gate in CI/CD pipelines.
 
 ## Overview
 
-In CI mode, `whatif-explain` evaluates both the Azure What-If output and your source code changes to provide:
+`whatif-explain` provides **platform auto-detection** for seamless CI/CD integration:
 
-- **Risk Assessment** - Evaluates three independent risk buckets (drift, intent, operations)
-- **Safety Verdict** - Determines if deployment should proceed based on configurable thresholds
-- **PR Comments** - Posts detailed summary to pull requests
-- **Exit Codes** - Blocks unsafe deployments automatically
+- ✅ **Automatic CI mode** - Detects GitHub Actions or Azure DevOps and enables safety gates
+- ✅ **Zero configuration** - Extracts PR metadata from environment automatically
+- ✅ **Automatic PR comments** - Posts detailed analysis without manual commands
+- ✅ **Exit code gating** - Blocks unsafe deployments automatically (exit code 1)
 
-### Risk Bucket System
+### What Gets Auto-Detected
 
-CI mode evaluates three independent risk categories:
+**GitHub Actions:**
+- CI mode automatically enabled
+- PR title and description from event file
+- Git diff reference from PR base branch
+- PR comments posted when `GITHUB_TOKEN` available
 
-1. **Infrastructure Drift** - Detects changes in What-If output that aren't in the code diff (out-of-band modifications)
-2. **PR Intent Alignment** - Compares What-If changes to PR description to catch unintended changes
-3. **Risky Operations** - Identifies inherently dangerous Azure operations (deletions, security changes)
-
-Each bucket has an independent risk threshold (low, medium, high). Deployment fails if ANY bucket exceeds its threshold.
+**Azure DevOps:**
+- CI mode automatically enabled
+- PR ID from environment variables
+- Git diff reference from target branch
+- PR comments posted when `SYSTEM_ACCESSTOKEN` available
 
 ## GitHub Actions
 
-### Complete Example
+### Minimal Setup (Recommended)
+
+Complete PR review workflow in ~50 lines:
 
 ```yaml
-name: Infrastructure Deployment
+name: PR Review - Bicep What-If Analysis
 
 on:
   pull_request:
+    branches: [main]
     paths:
-      - 'infra/**'
-  push:
-    branches:
-      - main
+      - 'bicep/**'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+env:
+  BICEP_TEMPLATE: bicep/main.bicep
+  BICEP_PARAMS: bicep/main.bicepparam
 
 jobs:
   whatif-review:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write  # Required for PR comments
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Needed for git diff
+          fetch-depth: 0
 
-      - name: Azure Login
-        uses: azure/login@v2
+      - uses: azure/login@v2
         with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Install whatif-explain
-        run: pip install whatif-explain[anthropic]
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Run What-If
-        run: |
-          az deployment group what-if \
-            --resource-group my-rg \
-            --template-file infra/main.bicep \
-            --parameters infra/parameters.json \
-            --exclude-change-types NoChange Ignore \
-            > whatif-output.txt
+      - run: pip install whatif-explain[anthropic]
 
-      - name: AI Review & Deployment Gate
-        env:
+      - env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cat whatif-output.txt | whatif-explain \
-            --ci \
-            --diff-ref origin/main \
-            --bicep-dir infra/ \
-            --drift-threshold high \
-            --intent-threshold high \
-            --operations-threshold high \
-            --post-comment \
-            --format markdown
-
-      - name: Deploy (only if safe)
-        if: success() && github.ref == 'refs/heads/main'
-        run: |
-          az deployment group create \
-            --resource-group my-rg \
-            --template-file infra/main.bicep \
-            --parameters infra/parameters.json
+          az deployment group what-if \
+            --resource-group ${{ vars.AZURE_RESOURCE_GROUP }} \
+            --template-file ${{ env.BICEP_TEMPLATE }} \
+            --parameters ${{ env.BICEP_PARAMS }} \
+            --exclude-change-types NoChange Ignore \
+            | whatif-explain
 ```
 
-### Environment Variables
+**That's it!** Everything is automatic:
+- CI mode detected
+- PR metadata extracted
+- Diff reference set to `origin/main`
+- PR comment posted
+- Deployment blocked if high risk
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Set in repository secrets |
-| `GITHUB_TOKEN` | Auto | Automatically provided by GitHub Actions |
-| `GITHUB_REPOSITORY` | Auto | Automatically set (format: owner/repo) |
-| `GITHUB_REF` | Auto | Automatically set (contains PR number) |
+### Required Secrets
 
-### Required Permissions
+Add these to **Settings → Secrets and variables → Actions:**
 
-Add to your workflow file:
+| Secret | Description | How to get |
+|--------|-------------|------------|
+| `AZURE_CLIENT_ID` | App registration ID | Azure AD app registration |
+| `AZURE_TENANT_ID` | Azure AD tenant ID | `az account show` |
+| `AZURE_SUBSCRIPTION_ID` | Azure subscription ID | `az account show` |
+| `ANTHROPIC_API_KEY` | Anthropic API key | https://console.anthropic.com/ |
+
+**See [GITHUB_ACTIONS_SETUP.md](./GITHUB_ACTIONS_SETUP.md) for complete Azure authentication setup guide.**
+
+### Adjusting Risk Thresholds
+
+By default, deployments are blocked only on **high** risk. Adjust by adding flags:
 
 ```yaml
-permissions:
-  contents: read
-  pull-requests: write  # Needed for posting PR comments
+# More strict - block on medium risk
+| whatif-explain \
+  --drift-threshold medium \
+  --intent-threshold medium \
+  --operations-threshold medium
+
+# Very strict - block on any risk
+| whatif-explain \
+  --drift-threshold low \
+  --intent-threshold low \
+  --operations-threshold low
 ```
 
-### Setup Steps
+### Using Different Providers
 
-1. **Add Anthropic API Key to GitHub Secrets:**
-   - Go to repository Settings → Secrets and variables → Actions
-   - Add secret named `ANTHROPIC_API_KEY`
-   - Get your API key from https://console.anthropic.com/
+**Azure OpenAI:**
+```yaml
+- run: pip install whatif-explain[azure]
 
-2. **Add Azure Credentials:**
-   - Create a service principal: `az ad sp create-for-rbac --name "github-actions" --role contributor --scopes /subscriptions/{subscription-id}`
-   - Add the JSON output as `AZURE_CREDENTIALS` secret
+- env:
+    AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_KEY }}
+    AZURE_OPENAI_ENDPOINT: ${{ vars.AZURE_OPENAI_ENDPOINT }}
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    az deployment group what-if ... | whatif-explain --provider azure-openai
+```
 
-3. **Commit the workflow file to `.github/workflows/deploy.yml`**
+**Ollama (self-hosted):**
+```yaml
+- run: pip install whatif-explain[ollama]
 
-### PR Comment Example
-
-When a PR is created, you'll see a comment like:
-
-```markdown
-## What-If Deployment Review
-
-### Risk Assessment
-
-| Risk Bucket | Risk Level | Key Concerns |
-|-------------|------------|--------------|
-| Infrastructure Drift | Low | None |
-| PR Intent Alignment | Low | None |
-| Risky Operations | Low | None |
-
-### Resource Changes
-
-| # | Resource | Type | Action | Risk | Summary |
-|---|----------|------|--------|------|---------|
-| 1 | applicationinsights | APIM Diagnostic | Create | Low | Configures App Insights logging... |
-
-**Summary:** This deployment creates JWT authentication policies, updates diagnostic logging, and enhances API security.
-
-### Verdict: ✅ SAFE
-
-**Overall Risk Level:** Low
-**Highest Risk Bucket:** Operations
-**Reasoning:** All changes are adding new monitoring and diagnostic resources without modifying existing infrastructure.
-
----
-*Generated by whatif-explain*
+- env:
+    OLLAMA_HOST: http://localhost:11434
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    az deployment group what-if ... | whatif-explain --provider ollama
 ```
 
 ## Azure DevOps Pipelines
 
-### Complete Example
+### Minimal Setup (Recommended)
+
+Complete PR review pipeline:
 
 ```yaml
 trigger:
@@ -165,7 +158,7 @@ trigger:
       - main
   paths:
     include:
-      - infra/*
+      - bicep/*
 
 pr:
   branches:
@@ -173,10 +166,14 @@ pr:
       - main
   paths:
     include:
-      - infra/*
+      - bicep/*
 
 pool:
   vmImage: ubuntu-latest
+
+variables:
+  BICEP_TEMPLATE: bicep/main.bicep
+  BICEP_PARAMS: bicep/main.bicepparam
 
 stages:
   - stage: WhatIfReview
@@ -186,340 +183,253 @@ stages:
         displayName: 'AI Safety Review'
         steps:
           - checkout: self
-            fetchDepth: 0  # Needed for git diff
+            fetchDepth: 0
 
           - task: AzureCLI@2
-            displayName: 'Run What-If'
+            displayName: 'What-If Analysis & AI Review'
             inputs:
               azureSubscription: 'my-service-connection'
               scriptType: bash
               scriptLocation: inlineScript
               inlineScript: |
+                pip install whatif-explain[anthropic]
+
                 az deployment group what-if \
-                  --resource-group my-rg \
-                  --template-file infra/main.bicep \
-                  --parameters infra/parameters.json \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --template-file $(BICEP_TEMPLATE) \
+                  --parameters $(BICEP_PARAMS) \
                   --exclude-change-types NoChange Ignore \
-                  > $(Build.ArtifactStagingDirectory)/whatif-output.txt
-
-          - task: Bash@3
-            displayName: 'Install whatif-explain'
-            inputs:
-              targetType: inline
-              script: pip install whatif-explain[anthropic]
-
-          - task: Bash@3
-            displayName: 'AI Review & Deployment Gate'
+                  | whatif-explain
             env:
               ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
-            inputs:
-              targetType: inline
-              script: |
-                cat $(Build.ArtifactStagingDirectory)/whatif-output.txt | whatif-explain \
-                  --ci \
-                  --diff-ref origin/main \
-                  --bicep-dir infra/ \
-                  --drift-threshold high \
-                  --intent-threshold high \
-                  --operations-threshold high \
-                  --post-comment \
-                  --format markdown
-
-  - stage: Deploy
-    displayName: 'Deploy Infrastructure'
-    dependsOn: WhatIfReview
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
-    jobs:
-      - deployment: DeployInfra
-        displayName: 'Deploy to Azure'
-        environment: production
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - checkout: self
-
-                - task: AzureCLI@2
-                  displayName: 'Deploy Infrastructure'
-                  inputs:
-                    azureSubscription: 'my-service-connection'
-                    scriptType: bash
-                    scriptLocation: inlineScript
-                    inlineScript: |
-                      az deployment group create \
-                        --resource-group my-rg \
-                        --template-file infra/main.bicep \
-                        --parameters infra/parameters.json
 ```
 
-### Environment Variables
+**Auto-detection includes:**
+- CI mode enabled
+- PR ID from `SYSTEM_PULLREQUEST_PULLREQUESTID`
+- Diff reference from `SYSTEM_PULLREQUEST_TARGETBRANCH`
+- PR comments posted when `SYSTEM_ACCESSTOKEN` available
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | Set in pipeline variables |
-| `SYSTEM_ACCESSTOKEN` | Auto | Enable in pipeline settings |
-| `SYSTEM_COLLECTIONURI` | Auto | Automatically set |
-| `SYSTEM_TEAMPROJECT` | Auto | Automatically set |
-| `SYSTEM_PULLREQUEST_PULLREQUESTID` | Auto | Automatically set |
-| `BUILD_REPOSITORY_ID` | Auto | Automatically set |
+### Required Variables
 
-### Setup Steps
+Add these in **Pipelines → Library → Variable groups:**
 
-1. **Add Anthropic API Key to Pipeline Variables:**
-   - Go to Pipelines → Edit → Variables
-   - Add variable `ANTHROPIC_API_KEY` (mark as secret)
-   - Get your API key from https://console.anthropic.com/
+| Variable | Type | Description |
+|----------|------|-------------|
+| `ANTHROPIC_API_KEY` | Secret | From https://console.anthropic.com/ |
+| `RESOURCE_GROUP` | Plain | Your Azure resource group name |
 
-2. **Enable System.AccessToken:**
-   - In your pipeline YAML, ensure `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` is set
-   - Or enable "Allow scripts to access the OAuth token" in pipeline settings
+**Important:** Set `SYSTEM_ACCESSTOKEN` in pipeline YAML as shown above to enable PR comments.
 
-3. **Create Azure Service Connection:**
-   - Go to Project Settings → Service connections
-   - Add new Azure Resource Manager connection
-   - Name it `my-service-connection` (or update YAML)
-
-4. **Create Production Environment:**
-   - Go to Pipelines → Environments
-   - Create environment named `production`
-   - Add approvals if desired
-
-## Risk Thresholds
-
-Configure three independent thresholds to control when deployments are blocked. Each threshold operates on its respective risk bucket:
-
-```bash
-# All three thresholds (default: high for production safety)
---drift-threshold high          # Block if drift risk >= high
---intent-threshold high         # Block if intent misalignment >= high
---operations-threshold high     # Block if operations risk >= high
-
-# Example: Strict drift detection, lenient operations
---drift-threshold low           # Catch any drift
---intent-threshold medium       # Moderate intent checking
---operations-threshold high     # Only block dangerous ops
-```
-
-### Risk Bucket Definitions
-
-**1. Infrastructure Drift**
-- **High:** Critical resources drifting (security, identity, stateful resources), broad scope drift
-- **Medium:** Multiple resources drifting, configuration drift on important resources
-- **Low:** Minor drift (tags, display names), single resource drift on non-critical resources
-
-**2. PR Intent Alignment** *(requires --pr-title or --pr-description)*
-- **High:** Destructive changes not mentioned in PR, security/auth changes not mentioned
-- **Medium:** Resource modifications not aligned with PR intent, unexpected resource types
-- **Low:** New resources not mentioned but aligned with intent, minor scope differences
-
-**3. Risky Operations**
-- **High:** Deletion of stateful resources (databases, storage, key vaults), RBAC deletions, broad network security changes, encryption changes, SKU downgrades
-- **Medium:** Behavioral changes to existing resources, new public endpoints, firewall changes, policy modifications
-- **Low:** Adding resources, tags, monitoring resources, cosmetic changes
-
-## Best Practices
-
-### 1. Use on Pull Requests
-
-Run What-If review on every PR to catch issues early:
+### Adjusting Risk Thresholds
 
 ```yaml
-on:
-  pull_request:
-    paths:
-      - 'infra/**'
+| whatif-explain \
+  --drift-threshold medium \
+  --intent-threshold medium \
+  --operations-threshold medium
 ```
 
-### 2. Exclude NoChange Resources
+## Risk Assessment System
 
-Reduce noise by excluding unchanged resources:
+### Three Independent Risk Buckets
+
+Each deployment is evaluated across three risk categories:
+
+1. **Infrastructure Drift**
+   - Detects changes in What-If output not present in code diff
+   - Catches out-of-band modifications (manual portal changes)
+   - **High risk:** Security settings, stateful resources
+   - **Medium risk:** Multiple resources drifting
+   - **Low risk:** Tags, display names
+
+2. **PR Intent Alignment**
+   - Compares What-If changes to PR title/description
+   - Catches unintended side effects
+   - **High risk:** Destructive changes not mentioned
+   - **Medium risk:** Changes misaligned with PR purpose
+   - **Low risk:** Minor scope differences
+
+3. **Risky Operations**
+   - Evaluates inherent danger of Azure operations
+   - Independent of code/PR context
+   - **High risk:** Deletions, security changes, public access
+   - **Medium risk:** Behavioral changes, new endpoints
+   - **Low risk:** New resources, monitoring, tags
+
+### Risk Thresholds
+
+Each bucket has an independent threshold (low, medium, high):
 
 ```bash
-az deployment group what-if \
-  --exclude-change-types NoChange Ignore
-```
-
-### 3. Set Appropriate Risk Thresholds
-
-**Development/Staging:**
-```bash
---drift-threshold medium \
---intent-threshold medium \
---operations-threshold medium
-```
-
-**Production (Recommended):**
-```bash
---drift-threshold high \
---intent-threshold high \
---operations-threshold high
-```
-
-**Strict Drift Detection (catch any out-of-band changes):**
-```bash
+# Example: Strict on drift, lenient on operations
 --drift-threshold low \
 --intent-threshold high \
 --operations-threshold high
 ```
 
-### 4. Review PR Comments
+**Deployment fails if ANY bucket exceeds its threshold.**
 
-The AI provides context and recommendations—review them before merging.
+## Example PR Comment
 
-### 5. Keep Bicep Organized
+When a PR is created, you'll see:
 
-The `--bicep-dir` flag includes source files in the analysis. Keep your Bicep files well-organized for better AI understanding.
+```markdown
+## What-If Deployment Review
 
-### 6. Test Locally First
+### Risk Assessment
 
-Test the command locally before adding to CI:
+| Risk Bucket | Risk Level | Key Concerns |
+|-------------|------------|--------------|
+| Infrastructure Drift | Low | All changes present in code |
+| PR Intent Alignment | Low | Changes match PR description |
+| Risky Operations | Medium | Creates new public endpoint |
 
-```bash
-az deployment group what-if ... | whatif-explain \
-  --ci \
-  --diff-ref main \
-  --drift-threshold high \
-  --intent-threshold high \
-  --operations-threshold high
-```
+### Resource Changes
 
-## Workflow Patterns
+| # | Resource | Type | Action | Risk | Summary |
+|---|----------|------|--------|------|---------|
+| 1 | app-service | Microsoft.Web/sites | Create | Medium | New App Service with public endpoint |
+| 2 | app-plan | Microsoft.Web/serverfarms | Create | Low | Consumption plan for App Service |
 
-### Pattern 1: Review Only (No Auto-Deploy)
+**Summary:** This deployment creates new App Service resources as described in PR.
 
-```yaml
-# GitHub Actions
-- name: Review Only
-  run: |
-    cat whatif-output.txt | whatif-explain \
-      --ci \
-      --post-comment \
-      --drift-threshold high \
-      --intent-threshold high \
-      --operations-threshold high
-```
+### Verdict: ✅ SAFE
 
-No deployment step—use for informational reviews.
+**Overall Risk Level:** Medium
+**Highest Risk Bucket:** Operations
+**Reasoning:** New public endpoint is documented in PR and includes planned firewall rules.
 
-### Pattern 2: Review + Auto-Deploy on Main
-
-```yaml
-# Deploy only if safe AND on main branch
-- name: Deploy
-  if: success() && github.ref == 'refs/heads/main'
-  run: az deployment group create ...
-```
-
-### Pattern 3: Review + Manual Approval
-
-```yaml
-# Azure DevOps
-- deployment: DeployInfra
-  environment: production  # Requires manual approval
-  condition: succeeded()
-```
-
-Use Azure DevOps environments with approval gates.
-
-### Pattern 4: Multi-Environment
-
-```yaml
-# Different risk thresholds per environment
-- name: Review (Dev)
-  if: contains(github.ref, 'develop')
-  run: |
-    whatif-explain --ci \
-      --drift-threshold medium \
-      --intent-threshold medium \
-      --operations-threshold medium
-
-- name: Review (Prod)
-  if: contains(github.ref, 'main')
-  run: |
-    whatif-explain --ci \
-      --drift-threshold high \
-      --intent-threshold high \
-      --operations-threshold high
+---
+*Generated by whatif-explain*
 ```
 
 ## Troubleshooting
 
-### PR comments not posting
+### GitHub Actions: No PR comment posted
 
-**GitHub Actions:**
-- Check `permissions.pull-requests: write` is set
-- Verify `GITHUB_TOKEN` has correct permissions
+**Cause:** Missing `pull-requests: write` permission
 
-**Azure DevOps:**
-- Ensure `SYSTEM_ACCESSTOKEN: $(System.AccessToken)` is set
-- Enable "Allow scripts to access the OAuth token" in pipeline settings
+**Fix:**
+```yaml
+permissions:
+  pull-requests: write
+```
 
-### Exit code 1 (unsafe) when it should be safe
+### Azure DevOps: No PR comment posted
 
-- Check which risk bucket failed (shown in stderr)
-- Review threshold settings for all three buckets
-- Review the verdict in output or PR comment
-- The LLM may be overly conservative—adjust thresholds if needed
-- Consider setting different thresholds per bucket based on your risk tolerance
+**Cause:** Missing `SYSTEM_ACCESSTOKEN` environment variable
 
-### Git diff errors
+**Fix:**
+```yaml
+env:
+  SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+```
 
-- Ensure `fetch-depth: 0` in checkout step
-- Verify `--diff-ref` points to valid branch/commit
-- Check branch protection rules
+### "CI mode not detected"
 
-### Large What-If output
+**Cause:** Running outside GitHub Actions or Azure DevOps
 
-Input is truncated to 100,000 characters. If needed:
-- Use `--exclude-change-types NoChange Ignore`
-- Break deployments into smaller scopes
+**Fix:** Manually enable CI mode:
+```bash
+| whatif-explain --ci
+```
+
+### High risk detected unexpectedly
+
+**Cause:** Infrastructure drift (deployed resources don't match code)
+
+**Fix:**
+1. Check drift explanation in PR comment
+2. Update code to match infrastructure, OR
+3. Deploy from main branch to sync infrastructure
 
 ## Advanced Configuration
 
-### Custom Models
+### Multi-Environment Setup
 
-```bash
-# Use Claude Opus for more complex analysis
-whatif-explain --ci --model claude-opus-4-20250101
+Use different thresholds per environment:
 
-# Use Azure OpenAI
-whatif-explain --ci --provider azure-openai
+**Development:**
+```yaml
+| whatif-explain \
+  --drift-threshold low \      # Catch all drift
+  --intent-threshold medium \
+  --operations-threshold medium
 ```
 
-### Multiple Scopes
-
-Review multiple resource groups:
-
-```bash
-# Run What-If for each scope
-az deployment group what-if -g rg-1 ... > whatif-rg-1.txt
-az deployment group what-if -g rg-2 ... > whatif-rg-2.txt
-
-# Review each separately
-cat whatif-rg-1.txt | whatif-explain --ci
-cat whatif-rg-2.txt | whatif-explain --ci
+**Production:**
+```yaml
+| whatif-explain \
+  --drift-threshold high \     # Only block critical drift
+  --intent-threshold high \
+  --operations-threshold high
 ```
 
-### Save Reviews
+### Manual PR Metadata (Optional)
 
-Store reviews as artifacts:
+If auto-detection fails, manually provide PR details:
+
+```bash
+| whatif-explain \
+  --pr-title "Add monitoring resources" \
+  --pr-description "This PR adds Application Insights diagnostics"
+```
+
+### Specify Bicep Source Directory
+
+Include Bicep source files for better analysis:
+
+```bash
+| whatif-explain --bicep-dir bicep/modules/
+```
+
+## Other CI Platforms
+
+For platforms without built-in auto-detection (GitLab, Jenkins, etc.), manually enable CI mode:
+
+### GitLab CI
 
 ```yaml
-# GitHub Actions
-- name: Upload Review
-  uses: actions/upload-artifact@v4
-  with:
-    name: whatif-review
-    path: whatif-output.txt
+bicep_review:
+  stage: review
+  script:
+    - pip install whatif-explain[anthropic]
+    - |
+      az deployment group what-if ... | whatif-explain \
+        --ci \
+        --diff-ref origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME \
+        --pr-title "$CI_MERGE_REQUEST_TITLE" \
+        --pr-description "$CI_MERGE_REQUEST_DESCRIPTION"
+  only:
+    - merge_requests
+  variables:
+    ANTHROPIC_API_KEY: $ANTHROPIC_API_KEY
 ```
 
-## Support
+### Jenkins
 
-For issues or questions, refer to the project documentation in the repository.
+```groovy
+stage('What-If Review') {
+  steps {
+    sh '''
+      pip install whatif-explain[anthropic]
+      az deployment group what-if ... | whatif-explain \
+        --ci \
+        --diff-ref origin/${CHANGE_TARGET} \
+        --pr-title "${CHANGE_TITLE}"
+    '''
+  }
+  environment {
+    ANTHROPIC_API_KEY = credentials('anthropic-api-key')
+  }
+}
+```
 
-## Related Tools
+## Additional Resources
 
-- **Azure CLI:** https://docs.microsoft.com/cli/azure/
-- **Bicep:** https://learn.microsoft.com/azure/azure-resource-manager/bicep/
-- **What-If:** https://learn.microsoft.com/azure/azure-resource-manager/bicep/deploy-what-if
+- [GitHub Actions Setup Guide](./GITHUB_ACTIONS_SETUP.md) - Complete setup with Azure authentication
+- [Workflow Comparison](./WORKFLOW_COMPARISON.md) - Before/after examples
+- [Platform Auto-Detection](./PLATFORM_AUTO_DETECTION_PLAN.md) - How auto-detection works
+- [Main Documentation](../README.md) - Full feature reference
