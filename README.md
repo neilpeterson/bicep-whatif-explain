@@ -100,21 +100,14 @@ az deployment group what-if \
 # Exit code 0 = safe, 1 = unsafe (deployment blocked)
 ```
 
-**Auto-detection includes:**
-- ✅ Enables CI mode automatically in pipeline environments
-- ✅ Extracts PR title/description from environment
-- ✅ Sets git diff reference from PR base branch
-- ✅ Posts PR comments when auth token available
-- ✅ Blocks unsafe deployments with exit code 1
-
 **Features:** Everything in Standard Mode, plus:
-- Three-bucket risk assessment (drift, intent alignment, risky operations)
-- Git diff analysis to detect infrastructure drift
-- PR intent validation (compares changes to PR description)
-- Independent thresholds for each risk category
-- Deployment verdicts with configurable sensitivity
-- Exit code 0 (safe) or 1 (unsafe)
-- Optional PR comment posting
+- ✅ **Platform Auto-Detection** - Automatically enables CI mode in GitHub Actions/Azure DevOps
+- ✅ **Git Diff Analysis** - Compares infrastructure changes to code changes to detect drift
+- ✅ **PR Intent Validation** - Auto-extracts PR title/description and validates changes match intent
+- ✅ **Three-Bucket Risk Assessment** - Independent evaluation of drift, intent alignment, and risky operations
+- ✅ **Configurable Thresholds** - Set sensitivity per risk category (low, medium, high)
+- ✅ **Deployment Gating** - Exit code 0 (safe) or 1 (unsafe) blocks deployments automatically
+- ✅ **Automatic PR Comments** - Posts detailed analysis when auth token available
 
 **Risk Buckets:**
 - 🔄 **Infrastructure Drift** - Detects changes not in your code diff (out-of-band modifications)
