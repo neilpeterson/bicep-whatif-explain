@@ -29,7 +29,9 @@ Complete installation and usage guide for `bicep-whatif-advisor`.
 - Azure CLI installed and configured
 - An LLM provider account (Anthropic, Azure OpenAI, or Ollama)
 
-### Install from PyPI
+### Install from PyPI (Recommended)
+
+**For most users** - Install the published package:
 
 ```bash
 # Install with Anthropic Claude support (recommended)
@@ -42,9 +44,13 @@ pip install bicep-whatif-advisor[azure]
 pip install bicep-whatif-advisor[all]
 ```
 
-### Install from Source
+### Install from Source (Contributors Only)
+
+**For contributors and developers** - Install from source to modify the code:
 
 ```bash
+# Clone the repository
+git clone https://github.com/neilpeterson/bicep-whatif-advisor.git
 cd bicep-whatif-advisor
 
 # Install with Anthropic support
