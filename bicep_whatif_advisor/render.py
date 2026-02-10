@@ -267,12 +267,13 @@ def render_json(data: dict) -> None:
     print(json.dumps(data, indent=2))
 
 
-def render_markdown(data: dict, ci_mode: bool = False) -> str:
+def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None) -> str:
     """Render output as markdown table suitable for PR comments.
 
     Args:
         data: Parsed LLM response
         ci_mode: Include risk assessment and verdict
+        custom_title: Custom title for the comment (default: "What-If Deployment Review")
 
     Returns:
         Markdown-formatted string
@@ -280,7 +281,8 @@ def render_markdown(data: dict, ci_mode: bool = False) -> str:
     lines = []
 
     if ci_mode:
-        lines.append("## What-If Deployment Review")
+        title = custom_title if custom_title else "What-If Deployment Review"
+        lines.append(f"## {title}")
         lines.append("")
 
         # Add risk bucket summary

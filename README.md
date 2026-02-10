@@ -149,6 +149,13 @@ bicep-whatif-advisor \
 
 **Available thresholds:** `low`, `medium`, `high` (defaults to `high`)
 
+### Multi-Environment Pipelines
+```bash
+# Distinguish environments in PR comments
+bicep-whatif-advisor --comment-title "Production"
+bicep-whatif-advisor --comment-title "Dev Environment"
+```
+
 ## CI/CD Integration
 
 ### GitHub Actions

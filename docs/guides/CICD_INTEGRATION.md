@@ -435,6 +435,60 @@ See [Risk Assessment Guide](./RISK_ASSESSMENT.md) for detailed explanation.
 
 ## Advanced Features
 
+### Multi-Environment Labeling (`--comment-title`)
+
+When running the tool against multiple environments in the same pipeline (dev, staging, production), use `--comment-title` to distinguish PR comments:
+
+**Problem:** Multiple comments titled "What-If Deployment Review" are hard to differentiate.
+
+**Solution:** Customize the title for each environment:
+
+```bash
+# Development environment
+az deployment group what-if ... | bicep-whatif-advisor \
+  --comment-title "Dev Environment"
+
+# Production environment
+az deployment group what-if ... | bicep-whatif-advisor \
+  --comment-title "Production"
+```
+
+**GitHub Actions Example:**
+```yaml
+jobs:
+  review-dev:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dev What-If Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ vars.DEV_RESOURCE_GROUP }} \
+            --template-file main.bicep \
+            --exclude-change-types NoChange Ignore \
+            | bicep-whatif-advisor --comment-title "Dev Environment"
+
+  review-prod:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Production What-If Review
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          az deployment group what-if \
+            --resource-group ${{ vars.PROD_RESOURCE_GROUP }} \
+            --template-file main.bicep \
+            --exclude-change-types NoChange Ignore \
+            | bicep-whatif-advisor --comment-title "Production"
+```
+
+**Result:** PR will show two clearly labeled comments:
+- **Dev Environment**
+- **Production**
+
 ### Non-Blocking Mode (`--no-block`)
 
 By default, CI mode blocks deployment if risk thresholds are exceeded (exit code 1). Use `--no-block` to report findings without failing the pipeline:

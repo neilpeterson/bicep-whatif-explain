@@ -109,6 +109,7 @@ az deployment group what-if ... | bicep-whatif-advisor --ci --diff-ref origin/ma
 | `--pr-title` | | Auto-detect | Pull request title for intent analysis (auto-fetched in GitHub Actions) |
 | `--pr-description` | | Auto-detect | Pull request description for intent analysis (auto-fetched in GitHub Actions) |
 | `--no-block` | | _(disabled)_ | Don't fail pipeline even if deployment is unsafe - only report findings (CI mode only) |
+| `--comment-title` | | `What-If Deployment Review` | Custom title for PR comment (useful for multi-environment pipelines) |
 
 ### Exit Codes
 
