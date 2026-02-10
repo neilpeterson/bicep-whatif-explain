@@ -154,6 +154,10 @@ bicep-whatif-advisor \
 # Distinguish environments in PR comments
 bicep-whatif-advisor --comment-title "Production"
 bicep-whatif-advisor --comment-title "Dev Environment"
+
+# Non-blocking mode automatically labels the comment
+bicep-whatif-advisor --comment-title "Production" --no-block
+# Title becomes: "Production (non-blocking)"
 ```
 
 ## CI/CD Integration

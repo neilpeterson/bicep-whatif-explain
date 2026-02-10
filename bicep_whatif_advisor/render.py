@@ -267,13 +267,14 @@ def render_json(data: dict) -> None:
     print(json.dumps(data, indent=2))
 
 
-def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None) -> str:
+def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None, no_block: bool = False) -> str:
     """Render output as markdown table suitable for PR comments.
 
     Args:
         data: Parsed LLM response
         ci_mode: Include risk assessment and verdict
         custom_title: Custom title for the comment (default: "What-If Deployment Review")
+        no_block: Append "(non-blocking)" to title if True
 
     Returns:
         Markdown-formatted string
@@ -282,6 +283,8 @@ def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None)
 
     if ci_mode:
         title = custom_title if custom_title else "What-If Deployment Review"
+        if no_block:
+            title = f"{title} (non-blocking)"
         lines.append(f"## {title}")
         lines.append("")
 

@@ -451,6 +451,12 @@ az deployment group what-if ... | bicep-whatif-advisor \
 # Production environment
 az deployment group what-if ... | bicep-whatif-advisor \
   --comment-title "Production"
+
+# Non-blocking analysis (automatically appends "non-blocking" to title)
+az deployment group what-if ... | bicep-whatif-advisor \
+  --comment-title "Deployment Analysis Production" \
+  --no-block
+# Title becomes: "Deployment Analysis Production (non-blocking)"
 ```
 
 **GitHub Actions Example:**
@@ -485,9 +491,10 @@ jobs:
             | bicep-whatif-advisor --comment-title "Production"
 ```
 
-**Result:** PR will show two clearly labeled comments:
+**Result:** PR will show clearly labeled comments:
 - **Dev Environment**
 - **Production**
+- **Deployment Analysis Production (non-blocking)** - when using `--no-block`
 
 ### Non-Blocking Mode (`--no-block`)
 
@@ -505,9 +512,11 @@ By default, CI mode blocks deployment if risk thresholds are exceeded (exit code
 az deployment group what-if ... | bicep-whatif-advisor \
   --ci \
   --no-block \
-  --post-comment
+  --post-comment \
+  --comment-title "Deployment Analysis Production"
 
 # Exit code: Always 0, even if unsafe
+# PR comment title: "Deployment Analysis Production (non-blocking)"
 ```
 
 **Output:**
@@ -515,6 +524,8 @@ az deployment group what-if ... | bicep-whatif-advisor \
 ⚠️  Warning: Failed risk buckets: operations (pipeline not blocked due to --no-block)
 ℹ️  CI mode: Reporting findings only (--no-block enabled)
 ```
+
+**Note:** When `--no-block` is used, "(non-blocking)" is automatically appended to the PR comment title, making it immediately clear that the review is informational only.
 
 **GitHub Actions example:**
 ```yaml
