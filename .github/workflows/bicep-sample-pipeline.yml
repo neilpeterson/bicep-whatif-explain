@@ -26,7 +26,7 @@ concurrency:
 
 env:
   BICEP_TEMPLATE: ./sample-bicep-deployment/main.bicep
-  BICEP_PARAMS: ./sample-bicep-deployment/azure-personal-subscription.bicepparam
+  BICEP_PARAMS: ./sample-bicep-deployment/pre-production.bicepparam
   PYTHON_VERSION: '3.11'
 
 jobs:
