@@ -44,7 +44,8 @@ def render_table(
     data: dict,
     verbose: bool = False,
     no_color: bool = False,
-    ci_mode: bool = False
+    ci_mode: bool = False,
+    low_confidence_data: dict = None
 ) -> None:
     """Render output as a colored table using Rich.
 
@@ -53,6 +54,7 @@ def render_table(
         verbose: Show property-level changes for modified resources
         no_color: Disable colored output
         ci_mode: Include risk assessment columns
+        low_confidence_data: Optional dict with low-confidence resources (potential noise)
     """
     # Determine if we should use colors
     use_color = not no_color and sys.stdout.isatty()
@@ -127,6 +129,57 @@ def render_table(
     # Print CI verdict if in CI mode
     if ci_mode:
         _print_ci_verdict(console, data.get("verdict", {}), use_color)
+
+    # Print low-confidence resources as "Potential Noise" section
+    if low_confidence_data and low_confidence_data.get("resources"):
+        _print_noise_section(console, low_confidence_data, use_color, ci_mode)
+
+
+def _print_noise_section(console: Console, low_confidence_data: dict, use_color: bool, ci_mode: bool) -> None:
+    """Print low-confidence resources as potential Azure What-If noise."""
+    resources = low_confidence_data.get("resources", [])
+    if not resources:
+        return
+
+    # Print header
+    header = _colorize("⚠️  Potential Azure What-If Noise (Low Confidence)", "yellow bold", use_color)
+    console.print(header)
+    console.print(_colorize(
+        "The following changes were flagged as likely What-If noise and excluded from risk analysis:",
+        "dim", use_color
+    ))
+    console.print()
+
+    # Create noise table
+    noise_table = Table(box=box.ROUNDED, show_lines=True, padding=(0, 1))
+    noise_table.add_column("#", style="dim", width=4)
+    noise_table.add_column("Resource", style="bold")
+    noise_table.add_column("Type")
+    noise_table.add_column("Action", justify="center")
+    noise_table.add_column("Confidence Reason")
+
+    # Add rows
+    for idx, resource in enumerate(resources, 1):
+        resource_name = resource.get("resource_name", "Unknown")
+        resource_type = resource.get("resource_type", "Unknown")
+        action = resource.get("action", "Unknown")
+        confidence_reason = resource.get("confidence_reason", "No reason provided")
+
+        # Get action color
+        _, color = ACTION_STYLES.get(action, ("?", "white"))
+        action_display = action
+
+        noise_table.add_row(
+            str(idx),
+            resource_name,
+            resource_type,
+            _colorize(action_display, color, use_color),
+            confidence_reason
+        )
+
+    # Print table
+    console.print(noise_table)
+    console.print()
 
 
 def _print_risk_bucket_summary(console: Console, risk_assessment: dict, use_color: bool) -> None:
@@ -258,16 +311,24 @@ def _print_ci_verdict(console: Console, verdict: dict, use_color: bool) -> None:
     console.print()
 
 
-def render_json(data: dict) -> None:
+def render_json(data: dict, low_confidence_data: dict = None) -> None:
     """Render output as pretty-printed JSON.
 
     Args:
-        data: Parsed LLM response
+        data: Parsed LLM response (high-confidence resources)
+        low_confidence_data: Optional dict with low-confidence resources
     """
-    print(json.dumps(data, indent=2))
+    output = {
+        "high_confidence": data,
+    }
+
+    if low_confidence_data:
+        output["low_confidence"] = low_confidence_data
+
+    print(json.dumps(output, indent=2))
 
 
-def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None, no_block: bool = False) -> str:
+def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None, no_block: bool = False, low_confidence_data: dict = None) -> str:
     """Render output as markdown table suitable for PR comments.
 
     Args:
@@ -275,6 +336,7 @@ def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None,
         ci_mode: Include risk assessment and verdict
         custom_title: Custom title for the comment (default: "What-If Deployment Review")
         no_block: Append "(non-blocking)" to title if True
+        low_confidence_data: Optional dict with low-confidence resources (potential noise)
 
     Returns:
         Markdown-formatted string
@@ -367,6 +429,32 @@ def render_markdown(data: dict, ci_mode: bool = False, custom_title: str = None,
     overall_summary = data.get("overall_summary", "")
     if overall_summary:
         lines.append(f"**Summary:** {overall_summary}")
+        lines.append("")
+
+    # Add collapsible noise section for low-confidence resources
+    if low_confidence_data and low_confidence_data.get("resources"):
+        lines.append("---")
+        lines.append("")
+        lines.append("<details>")
+        lines.append("<summary>⚠️ Potential Azure What-If Noise (Low Confidence)</summary>")
+        lines.append("")
+        lines.append("The following changes were flagged as likely What-If noise and **excluded from risk analysis**:")
+        lines.append("")
+        lines.append("| # | Resource | Type | Action | Confidence Reason |")
+        lines.append("|---|----------|------|--------|-------------------|")
+
+        for idx, resource in enumerate(low_confidence_data.get("resources", []), 1):
+            resource_name = resource.get("resource_name", "Unknown")
+            resource_type = resource.get("resource_type", "Unknown")
+            action = resource.get("action", "Unknown")
+            confidence_reason = resource.get("confidence_reason", "No reason provided").replace("|", "\\|")
+
+            lines.append(
+                f"| {idx} | {resource_name} | {resource_type} | {action} | {confidence_reason} |"
+            )
+
+        lines.append("")
+        lines.append("</details>")
         lines.append("")
 
     # CI verdict

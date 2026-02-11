@@ -32,7 +32,9 @@ def _build_standard_system_prompt(verbose: bool) -> str:
       "resource_name": "string — the short resource name",
       "resource_type": "string — the Azure resource type, abbreviated",
       "action": "string — Create, Modify, Delete, Deploy, NoChange, Ignore",
-      "summary": "string — plain English explanation of this change"
+      "summary": "string — plain English explanation of this change",
+      "confidence_level": "low|medium|high — confidence this is a real change vs What-If noise",
+      "confidence_reason": "string — brief explanation of confidence assessment"
     }
   ],
   "overall_summary": "string — brief summary with action counts and intent"
@@ -43,6 +45,31 @@ For resources with action "Modify", also include a "changes" field:
 an array of strings describing each property-level change.
 '''
 
+    confidence_instructions = '''
+
+## Confidence Assessment
+
+For each resource, assess confidence that the change is REAL vs Azure What-If noise:
+
+**HIGH confidence (real changes):**
+- Resource creation, deletion, or state changes
+- Configuration modifications with clear intent
+- Security, networking, or compute changes
+
+**MEDIUM confidence (potentially real but uncertain):**
+- Retention policies or analytics settings
+- Subnet references changing from hardcoded to dynamic
+- Configuration changes that might be platform-managed
+
+**LOW confidence (likely What-If noise):**
+- Metadata-only changes (etag, id, provisioningState, type)
+- logAnalyticsDestinationType property changes
+- IPv6 flags (disableIpv6, enableIPv6Addressing)
+- Computed properties (resourceGuid)
+- Read-only or system-managed properties
+
+Use your judgment - these are guidelines, not rigid patterns.'''
+
     prompt = f'''You are an Azure infrastructure expert. You analyze Azure Resource Manager
 What-If deployment output and produce concise, accurate summaries.
 
@@ -52,6 +79,8 @@ You must respond with ONLY valid JSON matching this schema, no other text:
 
     if verbose:
         prompt += "\n" + verbose_addition
+
+    prompt += confidence_instructions
 
     return prompt
 
@@ -178,7 +207,32 @@ Do NOT include the "intent" bucket in your risk_assessment response.'''
     "reasoning": "string — 2-3 sentence explanation considering all buckets"
   }'''
 
-    return base_prompt + bucket_instructions + f'''
+    confidence_instructions = '''
+
+## Confidence Assessment
+
+For each resource, assess confidence that the change is REAL vs Azure What-If noise:
+
+**HIGH confidence (real changes):**
+- Resource creation, deletion, or state changes
+- Configuration modifications with clear intent
+- Security, networking, or compute changes
+
+**MEDIUM confidence (potentially real but uncertain):**
+- Retention policies or analytics settings
+- Subnet references changing from hardcoded to dynamic
+- Configuration changes that might be platform-managed
+
+**LOW confidence (likely What-If noise):**
+- Metadata-only changes (etag, id, provisioningState, type)
+- logAnalyticsDestinationType property changes
+- IPv6 flags (disableIpv6, enableIPv6Addressing)
+- Computed properties (resourceGuid)
+- Read-only or system-managed properties
+
+Use your judgment - these are guidelines, not rigid patterns.'''
+
+    return base_prompt + bucket_instructions + confidence_instructions + f'''
 
 Respond with ONLY valid JSON matching this schema:
 
@@ -190,7 +244,9 @@ Respond with ONLY valid JSON matching this schema:
       "action": "string — Create, Modify, Delete, Deploy, NoChange, Ignore",
       "summary": "string — what this change does",
       "risk_level": "low|medium|high",
-      "risk_reason": "string or null — why this is risky, if applicable"
+      "risk_reason": "string or null — why this is risky, if applicable",
+      "confidence_level": "low|medium|high — confidence this is a real change vs What-If noise",
+      "confidence_reason": "string — brief explanation of confidence assessment"
     }}
   ],
   "overall_summary": "string",

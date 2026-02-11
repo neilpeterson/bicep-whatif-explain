@@ -17,8 +17,9 @@ When integrated into your CI/CD pipeline, `bicep-whatif-advisor` automatically d
    - **Infrastructure Drift** - Detects changes not in your code (out-of-band modifications)
    - **PR Intent Alignment** - Ensures changes match PR description
    - **Risky Operations** - Flags dangerous operations (deletions, security changes, downgrades)
-6. **Post detailed PR comment** - Automatically comments with formatted analysis (zero config)
-7. **Gate deployment** - Exits with code 0 (safe) or 1 (unsafe) based on configurable thresholds per risk bucket
+6. **Filter Azure What-If noise** - LLM-based confidence scoring automatically identifies and excludes false positives (metadata changes, computed properties) from risk analysis while preserving visibility in separate section
+7. **Post detailed PR comment** - Automatically comments with formatted analysis (zero config)
+8. **Gate deployment** - Exits with code 0 (safe) or 1 (unsafe) based on configurable thresholds per risk bucket
 
 **Example Output:**
 ```

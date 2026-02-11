@@ -27,8 +27,12 @@ def evaluate_risk_buckets(
 ) -> Tuple[bool, List[str], Dict[str, Any]]:
     """Evaluate risk buckets and determine if deployment is safe.
 
+    NOTE: This function expects pre-filtered data containing only medium/high-confidence
+    resources. Low-confidence resources (likely Azure What-If noise) should be filtered
+    out before calling this function to avoid noise contaminating risk assessment.
+
     Args:
-        data: Parsed LLM response with risk_assessment
+        data: Parsed LLM response with risk_assessment (should contain only high-confidence resources)
         drift_threshold: Risk threshold for infrastructure drift bucket
         intent_threshold: Risk threshold for PR intent alignment bucket
         operations_threshold: Risk threshold for risky operations bucket

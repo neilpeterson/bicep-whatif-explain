@@ -152,7 +152,9 @@ You must respond with ONLY valid JSON matching this schema, no other text:
       "resource_name": "string — the short resource name",
       "resource_type": "string — the Azure resource type, abbreviated for readability",
       "action": "string — one of: Create, Modify, Delete, Deploy, NoChange, Ignore",
-      "summary": "string — 1-2 sentence plain English explanation of what this resource is and what the change does"
+      "summary": "string — 1-2 sentence plain English explanation of what this resource is and what the change does",
+      "confidence_level": "low|medium|high — confidence this is a real change vs What-If noise",
+      "confidence_reason": "string — brief explanation of confidence assessment"
     }
   ],
   "overall_summary": "string — a brief overall summary of the deployment, including counts by action type and the overall intent"
@@ -177,6 +179,32 @@ When `--verbose` is set, add to the system prompt:
 For resources with action "Modify", also include a "changes" field:
 an array of strings describing each property-level change.
 ```
+
+#### Confidence Scoring and Noise Filtering
+
+Azure What-If output contains significant false positives (noise) that aren't actual infrastructure changes. The tool uses LLM-based confidence scoring to intelligently filter noise while preserving visibility.
+
+**Confidence Levels:**
+- **High**: Real infrastructure changes (resource creation/deletion, configuration modifications, security/networking changes)
+- **Medium**: Potentially real but uncertain (retention policies, analytics settings, subnet reference changes)
+- **Low**: Likely noise (metadata-only changes like etag/id/provisioningState, logAnalyticsDestinationType, IPv6 flags, computed properties)
+
+**Filtering Behavior:**
+- Low-confidence resources are automatically excluded from risk bucket calculations (drift, intent, operations)
+- Low-confidence resources are displayed in a separate "Potential Noise" section for visibility
+- Always-on feature with no configuration flag required
+
+**Common Noise Patterns:**
+- Metadata properties: `etag`, `id`, `provisioningState`, `type`
+- Analytics: `logAnalyticsDestinationType`
+- IPv6 flags: `disableIpv6`, `enableIPv6Addressing`
+- Computed: `resourceGuid`
+- Read-only or system-managed properties
+
+**Future Enhancements (TODOs):**
+- `--show-all-confidence` flag to display high/medium/low separately
+- `--confidence-threshold` to make filtering configurable
+- Hybrid approach combining LLM + hardcoded patterns if LLM-only proves unreliable
 
 ### `providers/` — LLM Providers
 

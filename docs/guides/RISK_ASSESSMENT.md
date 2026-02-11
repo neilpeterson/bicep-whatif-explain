@@ -304,6 +304,164 @@ elif action == "Modify" and property == "publicNetworkAccess":
 - Three-bucket system provides redundancy
 - Your thresholds control the final decision
 
+## Noise Filtering with Confidence Scoring
+
+Azure What-If output contains significant "noise" — false positives that aren't actual infrastructure changes. These can contaminate risk assessments and cause false alarms.
+
+### The Problem
+
+**Common What-If noise patterns:**
+- Metadata properties: `etag`, `id`, `provisioningState`, `type`
+- Log analytics: `logAnalyticsDestinationType`
+- IPv6 flags: `disableIpv6`, `enableIPv6Addressing`
+- Computed properties: `resourceGuid`
+- Read-only or system-managed properties
+
+**Impact without filtering:**
+- **Drift bucket:** 20 changes detected, but 19 are metadata-only → false positive drift detection
+- **Intent bucket:** PR says "Add 1 resource" but What-If shows 20 changes → intent misalignment false alarm
+- **Operations bucket:** Less affected, but still includes noise in analysis
+
+### The Solution
+
+The tool uses **LLM-based confidence scoring** to intelligently filter noise:
+
+**How it works:**
+
+```
+1. LLM analyzes each resource change
+     ↓
+2. Assigns confidence level:
+   - HIGH: Real infrastructure change
+   - MEDIUM: Potentially real, uncertain
+   - LOW: Likely What-If noise
+     ↓
+3. Filtering:
+   - HIGH + MEDIUM: Included in risk analysis
+   - LOW: Excluded from risk calculations
+     ↓
+4. Display:
+   - High/medium resources in main table
+   - Low resources in separate "Potential Noise" section
+```
+
+### Confidence Levels Explained
+
+**HIGH confidence (included in risk analysis):**
+- Resource creation, deletion, or state changes
+- Configuration modifications with clear intent
+- Security, networking, or compute changes
+- Example: Creating a storage account, deleting a database
+
+**MEDIUM confidence (included in risk analysis):**
+- Retention policies or analytics settings
+- Subnet references changing from hardcoded to dynamic
+- Configuration changes that might be platform-managed
+- Example: `retentionInDays` changing, analytics destination updates
+
+**LOW confidence (excluded from risk analysis):**
+- Metadata-only changes: `etag`, `id`, `provisioningState`, `type`
+- `logAnalyticsDestinationType` property changes
+- IPv6 flags: `disableIpv6`, `enableIPv6Addressing`
+- Computed properties: `resourceGuid`
+- Example: Only etag or provisioningState changing
+
+### Example Output
+
+**Main Analysis Table:**
+```
+╭──────┬────────────────┬─────────────────┬────────┬──────┬───────────────────────────────╮
+│ #    │ Resource       │ Type            │ Action │ Risk │ Summary                       │
+├──────┼────────────────┼─────────────────┼────────┼──────┼───────────────────────────────┤
+│ 1    │ appinsights    │ APIM Diagnostic │ Create │ Low  │ Adds Application Insights     │
+╰──────┴────────────────┴─────────────────┴────────┴──────┴───────────────────────────────╯
+```
+
+**Potential Noise Section (separate):**
+```
+⚠️  Potential Azure What-If Noise (Low Confidence)
+The following changes were flagged as likely What-If noise and excluded from risk analysis:
+
+╭──────┬────────────────┬─────────────────┬────────┬──────────────────────────────────╮
+│ #    │ Resource       │ Type            │ Action │ Confidence Reason                │
+├──────┼────────────────┼─────────────────┼────────┼──────────────────────────────────┤
+│ 1    │ apim           │ API Management  │ Modify │ Only metadata changing (etag)    │
+│ 2    │ storage        │ Storage Account │ Modify │ IPv6 flag change (system-managed)│
+╰──────┴────────────────┴─────────────────┴────────┴──────────────────────────────────╯
+```
+
+### Benefits
+
+**✅ Cleaner risk assessment:**
+- Drift bucket only considers real changes, not metadata
+- Intent bucket compares PR description to actual changes, not noise
+- Operations bucket focuses on true risk, not false positives
+
+**✅ Preserved visibility:**
+- Low-confidence resources still displayed in separate section
+- You can review what was filtered
+- Complete transparency
+
+**✅ Always-on:**
+- No configuration required
+- Automatic filtering
+- Smart defaults
+
+### Why LLM-based?
+
+**Instead of hardcoded patterns:**
+```python
+# What we DON'T do:
+if property in ["etag", "id", "provisioningState"]:
+    confidence = "low"
+```
+
+**LLM advantages:**
+- ✅ Understands context (is this etag change part of a larger real change?)
+- ✅ Adapts to new noise patterns automatically
+- ✅ Handles nuance (IPv6 flags might be real or noise depending on context)
+- ✅ Explains reasoning for each confidence assessment
+
+### JSON Output
+
+When using `--format json`, both confidence levels are included:
+
+```json
+{
+  "high_confidence": {
+    "resources": [...],  // Resources in risk analysis
+    "risk_assessment": {...},
+    "verdict": {...}
+  },
+  "low_confidence": {
+    "resources": [...]  // Filtered noise
+  }
+}
+```
+
+This allows custom post-processing if needed.
+
+### FAQ: Confidence Scoring
+
+**Q: Can I disable confidence filtering?**
+
+A: Currently it's always-on. Future enhancement planned for `--no-confidence-filtering` flag.
+
+**Q: What if a real change is marked as low confidence?**
+
+A: Review the "Potential Noise" section output. If you see a real change incorrectly filtered:
+1. The LLM provides reasoning for each confidence assessment
+2. The change is still visible (not hidden)
+3. Report as an issue for improvement
+
+**Q: Can I customize what's considered noise?**
+
+A: Not currently. Future enhancement planned for configurable confidence thresholds.
+
+**Q: Does this affect the drift/intent/operations buckets?**
+
+A: Yes! That's the point. Low-confidence resources are excluded from ALL risk bucket calculations to prevent false positives.
+
 ## Thresholds and Control
 
 You set independent thresholds for each bucket to control when deployments are blocked:
