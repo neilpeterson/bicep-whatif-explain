@@ -1,0 +1,130 @@
+name: Bicep Pipeline - Review & Deploy
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'sample-bicep-deployment/**'
+      - '.github/workflows/bicep-sample-pipeline.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'sample-bicep-deployment/**'
+      - '.github/workflows/bicep-sample-pipeline.yml'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BICEP_TEMPLATE: ./sample-bicep-deployment/main.bicep
+  BICEP_PARAMS: ./sample-bicep-deployment/pre-production.bicepparam
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  pr-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: azure-personal-subscription
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install bicep-whatif-advisor
+        run: pip install -e .[anthropic]
+
+      - name: Run What-If analysis with safety gate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          az deployment group what-if \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file "${{ env.BICEP_TEMPLATE }}" \
+            --parameters "${{ env.BICEP_PARAMS }}" \
+            --exclude-change-types NoChange Ignore \
+            | bicep-whatif-advisor --no-block --comment-title "What-If Summary" --bicep-dir sample-bicep-deployment/
+
+  validate:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: azure-personal-subscription
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install bicep-whatif-advisor
+        run: pip install -e .[anthropic]
+
+      - name: Run What-If analysis
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          az deployment group what-if \
+            --name "bicep-whatif-${{ github.run_number }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file "${{ env.BICEP_TEMPLATE }}" \
+            --parameters "${{ env.BICEP_PARAMS }}" \
+            --exclude-change-types NoChange Ignore | bicep-whatif-advisor --format markdown >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    needs: validate
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: azure-personal-subscription
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep template
+        run: |
+          az deployment group create \
+            --name "bicep-deploy-${{ github.run_number }}" \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --template-file "${{ env.BICEP_TEMPLATE }}" \
+            --parameters ${{ env.BICEP_PARAMS }} \
+            --verbose

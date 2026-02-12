@@ -77,6 +77,54 @@ def extract_json(text: str) -> dict:
     raise ValueError("Could not extract valid JSON from LLM response")
 
 
+def filter_by_confidence(data: dict) -> tuple[dict, dict]:
+    """Filter resources by confidence level.
+
+    Splits resources into high-confidence (medium/high) and low-confidence (low) lists.
+    Low-confidence resources are likely Azure What-If noise and should be excluded
+    from risk analysis but displayed separately.
+
+    Args:
+        data: Parsed LLM response with resources and other fields
+
+    Returns:
+        Tuple of (high_confidence_data, low_confidence_data) dicts with same structure
+    """
+    resources = data.get("resources", [])
+
+    high_confidence_resources = []
+    low_confidence_resources = []
+
+    for resource in resources:
+        confidence = resource.get("confidence_level", "medium").lower()
+
+        if confidence == "low":
+            low_confidence_resources.append(resource)
+        else:
+            # medium and high confidence included in analysis
+            high_confidence_resources.append(resource)
+
+    # Build high-confidence data dict (includes CI fields if present)
+    high_confidence_data = {
+        "resources": high_confidence_resources,
+        "overall_summary": data.get("overall_summary", "")
+    }
+
+    # Preserve CI mode fields in high-confidence data
+    if "risk_assessment" in data:
+        high_confidence_data["risk_assessment"] = data["risk_assessment"]
+    if "verdict" in data:
+        high_confidence_data["verdict"] = data["verdict"]
+
+    # Build low-confidence data dict (no CI fields - these are excluded from risk analysis)
+    low_confidence_data = {
+        "resources": low_confidence_resources,
+        "overall_summary": ""  # No separate summary for noise
+    }
+
+    return high_confidence_data, low_confidence_data
+
+
 @click.command()
 @click.option(
     "--provider", "-p",
@@ -315,13 +363,28 @@ def main(
             sys.stderr.write("Warning: LLM response missing 'overall_summary' field.\n")
             data["overall_summary"] = "No summary provided."
 
+        # Add backward compatibility defaults for confidence fields
+        for resource in data.get("resources", []):
+            if "confidence_level" not in resource:
+                resource["confidence_level"] = "medium"  # Default to include in analysis
+            if "confidence_reason" not in resource:
+                resource["confidence_reason"] = "No confidence assessment provided"
+
+        # TODO: Add --show-all-confidence flag to display medium/high/low separately
+        # TODO: Consider adding --confidence-threshold to make filtering configurable
+        # TODO: If LLM-only confidence scoring proves unreliable, evaluate hybrid
+        #       approach combining LLM + hardcoded noise patterns
+
+        # Filter by confidence (always-on behavior)
+        high_confidence_data, low_confidence_data = filter_by_confidence(data)
+
         # Render output
         if format == "table":
-            render_table(data, verbose=verbose, no_color=no_color, ci_mode=ci)
+            render_table(high_confidence_data, verbose=verbose, no_color=no_color, ci_mode=ci, low_confidence_data=low_confidence_data)
         elif format == "json":
-            render_json(data)
+            render_json(high_confidence_data, low_confidence_data=low_confidence_data)
         elif format == "markdown":
-            markdown = render_markdown(data, ci_mode=ci, custom_title=comment_title, no_block=no_block)
+            markdown = render_markdown(high_confidence_data, ci_mode=ci, custom_title=comment_title, no_block=no_block, low_confidence_data=low_confidence_data)
             print(markdown)
 
         # CI mode: evaluate verdict and post comment
@@ -329,12 +392,12 @@ def main(
             from .ci.risk_buckets import evaluate_risk_buckets
 
             is_safe, failed_buckets, risk_assessment = evaluate_risk_buckets(
-                data, drift_threshold, intent_threshold, operations_threshold
+                high_confidence_data, drift_threshold, intent_threshold, operations_threshold
             )
 
             # Post comment if requested
             if post_comment:
-                markdown = render_markdown(data, ci_mode=True, custom_title=comment_title, no_block=no_block)
+                markdown = render_markdown(high_confidence_data, ci_mode=True, custom_title=comment_title, no_block=no_block, low_confidence_data=low_confidence_data)
                 _post_pr_comment(markdown, pr_url)
 
             # Exit with appropriate code
