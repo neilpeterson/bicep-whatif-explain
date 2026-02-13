@@ -68,6 +68,19 @@ resource nsg 'Microsoft.Network/networkSecurityGroups@2024-01-01' = {
         }
       }
       {
+        name: 'AllowHttpsFromMexicoFactory'
+        properties: {
+          priority: 125
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: '74.19.9.32'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '443'
+        }
+      }
+      {
         name: 'DenyAllInbound'
         properties: {
           priority: 4096
