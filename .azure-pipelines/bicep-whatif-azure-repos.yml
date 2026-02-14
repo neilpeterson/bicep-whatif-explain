@@ -1,0 +1,83 @@
+# Azure DevOps Pipeline for Bicep What-If Analysis
+# Repository: Azure Repos Git (TfsGit)
+#
+# This example shows how to use bicep-whatif-advisor when your repository
+# is hosted in Azure Repos (native Azure DevOps Git repositories).
+#
+# Key Difference: You can use SYSTEM_ACCESSTOKEN for PR comments
+
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - bicep/*
+
+pr:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - bicep/*
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  BICEP_TEMPLATE: bicep/main.bicep
+  BICEP_PARAMS: bicep/main.bicepparam
+
+stages:
+  - stage: WhatIfReview
+    displayName: 'What-If Review'
+    jobs:
+      - job: Review
+        displayName: 'AI Safety Review'
+        steps:
+          - checkout: self
+            fetchDepth: 0
+
+          - task: AzureCLI@2
+            displayName: 'What-If Analysis & AI Review'
+            inputs:
+              azureSubscription: 'my-service-connection'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                # Install the tool
+                pip install bicep-whatif-advisor[anthropic]
+
+                # Run What-If analysis and pipe to AI advisor
+                az deployment group what-if \
+                  --resource-group $(RESOURCE_GROUP) \
+                  --template-file $(BICEP_TEMPLATE) \
+                  --parameters $(BICEP_PARAMS) \
+                  --exclude-change-types NoChange Ignore \
+                  | bicep-whatif-advisor
+            env:
+              # Anthropic API key for AI analysis
+              ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+
+              # IMPORTANT: For Azure Repos, use SYSTEM_ACCESSTOKEN
+              # This allows posting comments to Azure DevOps PRs
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+# Variable Setup Instructions:
+#
+# 1. Add variables in Azure DevOps:
+#    - Pipelines → Library → Variable groups → New variable group
+#    - Name: "bicep-whatif-vars"
+#    - Variables:
+#      * ANTHROPIC_API_KEY (secret) - From https://console.anthropic.com/
+#      * RESOURCE_GROUP (plain) - Your Azure resource group name
+#
+# 2. Link variable group to pipeline:
+#    - Add this under 'variables:' section above:
+#      - group: bicep-whatif-vars
+#
+# 3. Grant build service permissions:
+#    - Project Settings → Repositories → Security
+#    - Find: "[Project Name] Build Service ([Organization Name])"
+#    - Set "Contribute to pull requests" to "Allow"

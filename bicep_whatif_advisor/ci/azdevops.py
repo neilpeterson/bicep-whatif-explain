@@ -12,11 +12,25 @@ def post_azdevops_comment(markdown: str) -> bool:
 
     Returns:
         True if successful, False otherwise
+
+    Note:
+        This only works for Azure Repos Git repositories. If using a GitHub
+        repository with Azure DevOps Pipelines, use post_github_comment instead.
     """
     try:
         import requests
     except ImportError:
         sys.stderr.write("Warning: requests package not installed. Cannot post PR comment.\n")
+        return False
+
+    # Check repository provider - only works for Azure Repos (TfsGit)
+    repo_provider = os.environ.get("BUILD_REPOSITORY_PROVIDER", "TfsGit")
+    if repo_provider != "TfsGit":
+        sys.stderr.write(
+            f"Warning: Azure DevOps PR comments only work with Azure Repos Git repositories.\n"
+            f"Detected repository provider: {repo_provider}\n"
+            f"For GitHub repositories, ensure GITHUB_TOKEN is set instead of SYSTEM_ACCESSTOKEN.\n"
+        )
         return False
 
     # Get required environment variables

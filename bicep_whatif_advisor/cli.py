@@ -606,6 +606,7 @@ def _post_pr_comment(markdown: str, pr_url: str = None) -> None:
     import os
 
     # Detect GitHub or Azure DevOps
+    # Priority 1: GITHUB_TOKEN (native GitHub Actions or ADO with GitHub repo)
     if os.environ.get("GITHUB_TOKEN"):
         from .ci.github import post_github_comment
         success = post_github_comment(markdown, pr_url)
@@ -614,13 +615,29 @@ def _post_pr_comment(markdown: str, pr_url: str = None) -> None:
         else:
             sys.stderr.write("Warning: Failed to post comment to GitHub PR.\n")
 
+    # Priority 2: Azure DevOps with Azure Repos (TfsGit)
     elif os.environ.get("SYSTEM_ACCESSTOKEN"):
-        from .ci.azdevops import post_azdevops_comment
-        success = post_azdevops_comment(markdown)
-        if success:
-            sys.stderr.write("Posted comment to Azure DevOps PR.\n")
+        # Check if using GitHub repo in Azure DevOps
+        repo_provider = os.environ.get("BUILD_REPOSITORY_PROVIDER", "TfsGit")
+
+        if repo_provider == "GitHub":
+            # GitHub repo in Azure DevOps - need GITHUB_TOKEN
+            sys.stderr.write(
+                "Warning: Detected GitHub repository in Azure DevOps pipeline.\n"
+                "To post PR comments, add GITHUB_TOKEN to pipeline environment variables.\n"
+                "Example:\n"
+                "  env:\n"
+                "    GITHUB_TOKEN: $(GITHUB_TOKEN)  # Add this as a pipeline variable\n"
+                "    SYSTEM_ACCESSTOKEN: $(System.AccessToken)\n"
+            )
         else:
-            sys.stderr.write("Warning: Failed to post comment to Azure DevOps PR.\n")
+            # Azure Repos Git - use Azure DevOps API
+            from .ci.azdevops import post_azdevops_comment
+            success = post_azdevops_comment(markdown)
+            if success:
+                sys.stderr.write("Posted comment to Azure DevOps PR.\n")
+            else:
+                sys.stderr.write("Warning: Failed to post comment to Azure DevOps PR.\n")
 
     else:
         sys.stderr.write(

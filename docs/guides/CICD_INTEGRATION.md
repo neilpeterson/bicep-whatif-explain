@@ -607,6 +607,43 @@ env:
 1. Project Settings → Repositories → Security
 2. Grant "Contribute to pull requests" to build service
 
+### Azure DevOps: Using GitHub Repository
+
+**Problem:** Pipeline runs successfully but PR comments fail with 404 error when using a GitHub repository (not Azure Repos).
+
+**Cause:** Azure DevOps PR comment API only works with Azure Repos Git repositories. When using GitHub as the repository source, the tool cannot post comments using `SYSTEM_ACCESSTOKEN`.
+
+**Fix:** Add a GitHub Personal Access Token to your pipeline:
+
+```yaml
+- task: AzureCLI@2
+  displayName: 'What-If Analysis & AI Review'
+  inputs:
+    azureSubscription: 'my-service-connection'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      pip install bicep-whatif-advisor[anthropic]
+
+      az deployment group what-if \
+        --resource-group $(RESOURCE_GROUP) \
+        --template-file $(BICEP_TEMPLATE) \
+        --parameters $(BICEP_PARAMS) \
+        --exclude-change-types NoChange Ignore \
+        | bicep-whatif-advisor
+  env:
+    ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
+    GITHUB_TOKEN: $(GITHUB_TOKEN)  # Add this for GitHub repositories
+```
+
+**Create GitHub Token:**
+1. GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
+2. Generate new token with `repo` scope (or fine-grained token with pull requests write permission)
+3. Add token to Azure DevOps: Pipelines → Library → Variable groups
+4. Name the variable `GITHUB_TOKEN` and mark it as secret
+
+**Note:** If using Azure Repos Git (not GitHub), use `SYSTEM_ACCESSTOKEN` as shown in the main examples.
+
 ### "CI mode not detected"
 
 **Cause:** Running outside GitHub Actions or Azure DevOps
