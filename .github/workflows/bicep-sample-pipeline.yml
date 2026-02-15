@@ -66,7 +66,11 @@ jobs:
             --template-file "${{ env.BICEP_TEMPLATE }}" \
             --parameters "${{ env.BICEP_PARAMS }}" \
             --exclude-change-types NoChange Ignore \
-            | bicep-whatif-advisor --no-block --comment-title "What-If Summary" --bicep-dir tests/sample-bicep-deployment/
+            | bicep-whatif-advisor \
+              --no-block \
+              --comment-title "What-If Summary" \
+              --bicep-dir tests/sample-bicep-deployment/ \
+              --noise-file tests/sample-bicep-deployment/.whatif-noise
 
   validate:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -101,7 +105,11 @@ jobs:
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --template-file "${{ env.BICEP_TEMPLATE }}" \
             --parameters "${{ env.BICEP_PARAMS }}" \
-            --exclude-change-types NoChange Ignore | bicep-whatif-advisor --format markdown >> $GITHUB_STEP_SUMMARY
+            --exclude-change-types NoChange Ignore \
+            | bicep-whatif-advisor \
+              --format markdown \
+              --noise-file tests/sample-bicep-deployment/.whatif-noise \
+              >> $GITHUB_STEP_SUMMARY
 
   deploy:
     needs: validate
